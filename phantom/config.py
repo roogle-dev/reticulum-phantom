@@ -27,9 +27,9 @@ DEFAULT_CHUNK_SIZE = 1_048_576    # 1 MB
 MIN_CHUNK_SIZE = 65_536           # 64 KB
 MAX_CHUNK_SIZE = 16_777_216       # 16 MB
 
-DEFAULT_ANNOUNCE_INTERVAL = 300   # seconds (5 minutes)
+DEFAULT_ANNOUNCE_INTERVAL = 60    # seconds (frequent for fast discovery)
 DEFAULT_TRANSFER_TIMEOUT = 120    # seconds (for data transfers)
-DEFAULT_LINK_TIMEOUT = 15         # seconds (for link establishment — fast failover)
+DEFAULT_LINK_TIMEOUT = 10         # seconds (for link establishment — fast failover)
 DEFAULT_PATH_TIMEOUT = 30         # seconds
 
 # TCP/IP defaults for initial transport
