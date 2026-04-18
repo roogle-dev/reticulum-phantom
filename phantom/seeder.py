@@ -65,8 +65,10 @@ class WantAnnounceHandler:
             cls._seeders.pop(ghost_hash, None)
 
     def __init__(self):
-        # Catch announces for "phantom.want.*" aspect
-        self.aspect_filter = config.RNS_APP_NAME + ".want"
+        # Catch ALL announces and filter manually by app_data.
+        # Using aspect_filter = None ensures we don't miss announces
+        # due to RNS name-hash mismatch with dynamic aspects.
+        self.aspect_filter = None
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         """Called by RNS when a 'want' announcement is received."""
@@ -217,14 +219,22 @@ class Seeder:
                 self.ghost.save(src_ghost)
 
         RNS.log(
-            f"Seeding (silent): {self.ghost.name} | "
+            f"Seeding: {self.ghost.name} | "
             f"Hash: {self.ghost.ghost_hash} | "
             f"Destination: {RNS.prettyhexrep(self._destination.hash)}",
             RNS.LOG_INFO
         )
 
+        # One-time announce so the mesh can route link requests to us.
+        # No periodic re-announces — discovery is driven by leecher wants.
+        if announce_delay > 0:
+            time.sleep(announce_delay)
+
+        self._destination.announce(app_data=umsgpack.packb({
+            "ghost_hash": self.ghost.ghost_hash,
+        }))
+
         # Register with the global want-announce handler
-        # (seeder no longer announces — waits for leechers to ask)
         WantAnnounceHandler.register_seeder(
             self.ghost.ghost_hash, self
         )
