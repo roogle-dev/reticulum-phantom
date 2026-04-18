@@ -518,23 +518,27 @@ class Leecher:
             closed_callback=on_closed
         )
 
-        # Wait for link establishment
+        # Wait for link establishment — check both events
         timeout = config.DEFAULT_TRANSFER_TIMEOUT
-        if not link_established.wait(timeout):
+        start = time.time()
+        while time.time() - start < timeout:
+            if link_established.is_set():
+                RNS.log("Encrypted link established with seeder ✓", RNS.LOG_INFO)
+                return self._link
             if link_failed.is_set():
                 RNS.log(
                     "Link to seeder failed — connection rejected or dropped",
                     RNS.LOG_WARNING
                 )
-            else:
-                RNS.log(
-                    "Link establishment timed out — seeder unreachable",
-                    RNS.LOG_WARNING
-                )
-            return None
+                return None
+            time.sleep(0.5)
 
-        RNS.log("Encrypted link established with seeder ✓", RNS.LOG_INFO)
-        return self._link
+        # Timeout
+        RNS.log(
+            "Link establishment timed out — seeder unreachable",
+            RNS.LOG_WARNING
+        )
+        return None
 
     def _fetch_manifest(self, link):
         """
