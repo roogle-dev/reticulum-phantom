@@ -87,6 +87,10 @@ class WantAnnounceHandler:
             if not isinstance(metadata, dict):
                 return
 
+            # Only respond to "want" announces, not other seeders
+            if metadata.get("type") != "want":
+                return
+
             wanted_hash = metadata.get("ghost_hash", "")
 
             with self._lock:

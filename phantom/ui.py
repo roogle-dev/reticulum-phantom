@@ -14,12 +14,9 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.progress import (
     Progress, BarColumn, TextColumn, TimeRemainingColumn,
-    TransferSpeedColumn, SpinnerColumn, TaskProgressColumn
+    SpinnerColumn, TaskProgressColumn
 )
-from rich.layout import Layout
-from rich.live import Live
 from rich.text import Text
-from rich.columns import Columns
 from rich import box
 
 from . import config

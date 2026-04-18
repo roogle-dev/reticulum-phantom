@@ -460,6 +460,7 @@ class PhantomEngine:
                         "chunks": ghost.chunk_count,
                         "ghost_hash": ghost.ghost_hash,
                         "seeder_dest": ghost.seeder_dest or "",
+                        "seeder_dests": list(ghost.seeder_dests) if ghost.seeder_dests else [],
                         "created_at": ghost.created_at,
                     })
 
@@ -521,6 +522,11 @@ class PhantomEngine:
                 if app_data:
                     try:
                         metadata = umsgpack.unpackb(app_data)
+                        if not isinstance(metadata, dict):
+                            return
+                        # Only track seeder announces in the peer list
+                        if metadata.get("type") != "seeder":
+                            return
                         ghost_hash = metadata.get("ghost_hash", "")
 
                         identity_hex = announced_identity.hash.hex()

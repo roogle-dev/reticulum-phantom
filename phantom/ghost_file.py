@@ -12,7 +12,7 @@ Extension: .ghost
 import os
 import time
 import hashlib
-import struct
+
 
 import RNS
 import RNS.vendor.umsgpack as umsgpack

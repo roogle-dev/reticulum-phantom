@@ -687,7 +687,7 @@ class PhantomTUI(App):
             table = self.query_one("#ghost-table", DataTable)
             table.add_columns(
                 "File Name", "Size", "Chunks", "Ghost Hash",
-                "Seeder Dest", "Created"
+                "Seeders", "Created"
             )
             self._refresh_ghost_table()
         except Exception:
@@ -710,17 +710,19 @@ class PhantomTUI(App):
                     created = "Unknown"
 
                 seeder_dest = g.get("seeder_dest", "")
-                if seeder_dest:
-                    seeder_dest = seeder_dest[:16] + "..."
+                seeder_dests = g.get("seeder_dests", [])
+                count = len(seeder_dests) if seeder_dests else (1 if seeder_dest else 0)
+                if count > 0:
+                    dest_display = f"{count} seeder(s)"
                 else:
-                    seeder_dest = "[not set]"
+                    dest_display = "[not set]"
 
                 table.add_row(
                     g["name"],
                     g["size_human"],
                     str(g["chunks"]),
                     g["ghost_hash"],
-                    seeder_dest,
+                    dest_display,
                     created,
                 )
         except Exception:

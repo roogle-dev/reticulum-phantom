@@ -711,7 +711,6 @@ def cmd_download(args):
 
                 # Track speed from actual network bytes
                 speed_start = time.time()
-                last_net_bytes = leecher.bytes_received
 
                 while leecher.state == Leecher.STATE_DOWNLOADING:
                     time.sleep(0.5)
