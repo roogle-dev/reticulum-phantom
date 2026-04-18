@@ -282,13 +282,18 @@ class Leecher:
         except (ValueError, Exception):
             pass
 
-        # Wait for discovery via announce OR direct path
-        timeout = config.DEFAULT_PATH_TIMEOUT * 2  # Give more time for announces
-        start = time.time()
+        # Wait for discovery — patient retry loop
+        # Mesh routes can take minutes to propagate through relay hubs.
+        # We keep retrying until found or user cancels (Ctrl+C).
+        retry_interval = 15  # Re-request path every 15 seconds
+        last_request = time.time()
+        attempt = 1
+
+        RNS.log("Waiting for seeder (will keep retrying)...", RNS.LOG_INFO)
 
         while not found_event.is_set():
+            # Check direct path
             if dest_hash and RNS.Transport.has_path(dest_hash):
-                # Direct path found
                 hops = RNS.Transport.hops_to(dest_hash)
                 RNS.log(
                     f"Path found via direct request! {hops} hops to seeder",
@@ -296,11 +301,19 @@ class Leecher:
                 )
                 return dest_hash
 
-            if time.time() - start > timeout:
-                break
+            # Re-request path periodically
+            if dest_hash and (time.time() - last_request > retry_interval):
+                attempt += 1
+                RNS.log(
+                    f"Re-requesting path (attempt {attempt})...",
+                    RNS.LOG_INFO
+                )
+                RNS.Transport.request_path(dest_hash)
+                last_request = time.time()
+
             if not self._running:
                 return None
-            time.sleep(0.5)
+            time.sleep(1)
 
         if found_event.is_set() and found_dest[0]:
             dest_hash = found_dest[0]
@@ -309,7 +322,7 @@ class Leecher:
                 RNS.Transport.request_path(dest_hash)
                 path_start = time.time()
                 while not RNS.Transport.has_path(dest_hash):
-                    if time.time() - path_start > config.DEFAULT_PATH_TIMEOUT:
+                    if time.time() - path_start > 60:
                         self._fail("Path request failed after announce")
                         return None
                     time.sleep(0.5)
@@ -321,7 +334,7 @@ class Leecher:
             )
             return dest_hash
 
-        self._fail("Seeder not found on mesh (timeout)")
+        self._fail("Seeder not found on mesh")
         return None
 
     def _connect_to_seeder(self, destination_hash):
