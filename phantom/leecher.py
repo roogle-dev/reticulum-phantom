@@ -151,8 +151,8 @@ class Leecher:
         return True
 
     def _download_worker(self):
-        """Main download worker thread with seeder failover."""
-        failed_dests = set()  # Track failed seeder dest hashes
+        """Main download worker thread with multi-peer swarm support."""
+        failed_dests = set()
         max_retries = 10
 
         for attempt in range(max_retries):
@@ -160,68 +160,69 @@ class Leecher:
                 return
 
             try:
-                # Step 1: Discover a seeder (skipping failed ones)
+                # Step 1: Discover ALL seeders
                 self._set_state(self.STATE_DISCOVERING)
-                destination_hash = self._discover_seeder(
+                seeder_dests = self._discover_seeders(
                     failed_dests=failed_dests
                 )
-                if not destination_hash:
+                if not seeder_dests:
                     return
 
-                # Step 2: Connect to the seeder
+                RNS.log(
+                    f"Found {len(seeder_dests)} seeder(s), connecting...",
+                    RNS.LOG_INFO
+                )
+
+                # Step 2: Connect to all seeders in parallel
                 self._set_state(self.STATE_CONNECTING)
-                link = self._connect_to_seeder(destination_hash)
-                if not link:
-                    # Connection failed — blacklist this seeder and retry
-                    failed_dests.add(destination_hash)
-                    dest_hex = destination_hash.hex()
+                active_links = self._connect_to_seeders(seeder_dests, failed_dests)
+
+                if not active_links:
                     RNS.log(
-                        f"Seeder {dest_hex[:16]}... failed, "
-                        f"searching for another seeder...",
+                        "No seeders connected, retrying...",
                         RNS.LOG_WARNING
                     )
-                    # Clean up failed link
-                    if self._link:
-                        try:
-                            self._link.teardown()
-                        except Exception:
-                            pass
-                        self._link = None
                     time.sleep(2)
-                    continue  # Retry with another seeder
+                    continue
 
-                # Step 3: Get manifest if we don't have it
+                RNS.log(
+                    f"Connected to {len(active_links)} peer(s)",
+                    RNS.LOG_INFO
+                )
+
+                # Step 3: Get manifest if needed (from first peer)
                 if not self.ghost:
                     self._set_state(self.STATE_FETCHING_MANIFEST)
-                    if not self._fetch_manifest(link):
-                        failed_dests.add(destination_hash)
-                        if self._link:
+                    first_link = active_links[0][1]  # (dest_hash, link)
+                    if not self._fetch_manifest(first_link):
+                        for dh, lk in active_links:
+                            failed_dests.add(dh)
                             try:
-                                self._link.teardown()
+                                lk.teardown()
                             except Exception:
                                 pass
-                            self._link = None
                         time.sleep(2)
                         continue
 
-                # Step 4: Download missing chunks
+                # Step 4: Download chunks from ALL peers
                 self._set_state(self.STATE_DOWNLOADING)
-                if not self._download_chunks(link):
-                    # Download interrupted — try another seeder
+                success = self._swarm_download(active_links, failed_dests)
+
+                # Clean up all links
+                for _, lk in active_links:
+                    try:
+                        lk.teardown()
+                    except Exception:
+                        pass
+
+                if not success:
                     if self._running and self.chunks_received < self.total_chunks:
-                        failed_dests.add(destination_hash)
                         RNS.log(
-                            f"Download interrupted at chunk "
+                            f"Swarm download interrupted at "
                             f"{self.chunks_received}/{self.total_chunks}, "
-                            f"trying another seeder...",
+                            f"retrying...",
                             RNS.LOG_WARNING
                         )
-                        if self._link:
-                            try:
-                                self._link.teardown()
-                            except Exception:
-                                pass
-                            self._link = None
                         time.sleep(2)
                         continue
                     return
@@ -248,52 +249,175 @@ class Leecher:
                     )
                 else:
                     self._fail("File assembly failed — hash mismatch")
-                return  # Success or assembly failure — done
+                return
 
             except Exception as e:
                 RNS.log(f"Download attempt {attempt+1} error: {e}",
                         RNS.LOG_ERROR)
-                if self._link:
-                    try:
-                        self._link.teardown()
-                    except Exception:
-                        pass
-                    self._link = None
-                if attempt < max_retries - 1:
-                    time.sleep(3)
-                    continue
-                self._fail(f"Download error after {max_retries} attempts: {e}")
-            finally:
-                if self._state not in (self.STATE_COMPLETE, self.STATE_FAILED,
-                                       self.STATE_DISCOVERING, self.STATE_CONNECTING):
-                    if self._link:
-                        try:
-                            self._link.teardown()
-                        except Exception:
-                            pass
+                time.sleep(3)
+                if attempt >= max_retries - 1:
+                    self._fail(f"Download error after {max_retries} attempts: {e}")
 
-    def _discover_seeder(self, failed_dests=None):
+    def _connect_to_seeders(self, dest_hashes, failed_dests):
         """
-        Find a seeder for the requested ghost_hash.
-        Skips any seeders in failed_dests set.
-
-        Uses three strategies:
-        1. Use seeder_dest from ghost file (fastest)
-        2. If input looks like a destination hash, try direct path request
-        3. Listen for announces with matching ghost_hash in app_data
+        Connect to multiple seeders in parallel.
 
         Returns:
-            Destination hash as bytes, or None if not found.
+            List of (dest_hash_bytes, link) tuples for successful connections.
+        """
+        results = []
+        lock = threading.Lock()
+        threads = []
+
+        def connect_one(dest_hash):
+            link = self._connect_to_seeder(dest_hash)
+            if link:
+                with lock:
+                    results.append((dest_hash, link))
+            else:
+                with lock:
+                    failed_dests.add(dest_hash)
+                RNS.log(
+                    f"Peer {dest_hash.hex()[:16]}... connection failed",
+                    RNS.LOG_WARNING
+                )
+
+        for dh in dest_hashes[:config.MAX_SWARM_PEERS]:
+            t = threading.Thread(target=connect_one, args=(dh,), daemon=True)
+            threads.append(t)
+            t.start()
+
+        for t in threads:
+            t.join(timeout=config.DEFAULT_LINK_TIMEOUT + 5)
+
+        return results
+
+    def _swarm_download(self, active_links, failed_dests):
+        """
+        Download chunks from multiple peers simultaneously.
+
+        Splits missing chunks into a shared queue. Each peer worker
+        pulls chunks from the queue. If a peer dies, its remaining
+        chunks go back to the queue for other peers.
+
+        Returns:
+            True if all chunks downloaded successfully.
+        """
+        import queue
+
+        missing = self.chunker.get_missing_chunks()
+        if not missing:
+            RNS.log("All chunks already available!", RNS.LOG_INFO)
+            self.chunks_received = self.total_chunks
+            return True
+
+        RNS.log(
+            f"Downloading {len(missing)} chunks from "
+            f"{len(active_links)} peer(s)",
+            RNS.LOG_INFO
+        )
+
+        self.chunks_received = self.total_chunks - len(missing)
+
+        # Thread-safe chunk queue
+        chunk_queue = queue.Queue()
+        for idx in missing:
+            chunk_queue.put(idx)
+
+        # Track peer stats
+        peer_stats = {}
+        stats_lock = threading.Lock()
+        all_done = threading.Event()
+        swarm_error = [False]
+
+        def peer_worker(dest_hash, link, peer_id):
+            """Worker thread for one peer — pulls chunks from shared queue."""
+            chunks_done = 0
+            peer_hex = dest_hash.hex()[:16]
+
+            while not all_done.is_set() and self._running:
+                try:
+                    chunk_index = chunk_queue.get(timeout=2)
+                except queue.Empty:
+                    # No more chunks in queue — check if done
+                    if chunk_queue.empty():
+                        break
+                    continue
+
+                # Download this chunk from our peer
+                success = self._download_single_chunk(link, chunk_index)
+
+                if success:
+                    chunks_done += 1
+                    with stats_lock:
+                        peer_stats[peer_hex] = chunks_done
+
+                    if self.chunks_received >= self.total_chunks:
+                        all_done.set()
+                        break
+                else:
+                    # Failed — put chunk back for another peer
+                    chunk_queue.put(chunk_index)
+                    RNS.log(
+                        f"Peer {peer_hex}... failed on chunk {chunk_index}, "
+                        f"reassigning to another peer",
+                        RNS.LOG_WARNING
+                    )
+                    # Add to failed dests so we don't retry this peer
+                    failed_dests.add(dest_hash)
+                    break  # This peer is dead, stop worker
+
+            RNS.log(
+                f"Peer {peer_hex}... finished: "
+                f"{chunks_done} chunks downloaded",
+                RNS.LOG_INFO
+            )
+
+        # Start worker threads — one per peer
+        workers = []
+        for i, (dh, lk) in enumerate(active_links):
+            t = threading.Thread(
+                target=peer_worker,
+                args=(dh, lk, i),
+                daemon=True
+            )
+            workers.append(t)
+            t.start()
+
+        # Wait for all workers to finish
+        for t in workers:
+            t.join()
+
+        # Check if we got everything
+        if self.chunks_received >= self.total_chunks:
+            return True
+        elif chunk_queue.empty():
+            return True
+        else:
+            RNS.log(
+                f"Swarm incomplete: {chunk_queue.qsize()} chunks remaining",
+                RNS.LOG_WARNING
+            )
+            return False
+
+    def _discover_seeders(self, failed_dests=None):
+        """
+        Find ALL seeders for the requested ghost_hash.
+        Collects seeders during a discovery window, then returns all found.
+
+        Returns:
+            List of destination hash bytes, or empty list if none found.
         """
         if failed_dests is None:
             failed_dests = set()
 
         input_hash = self.ghost_hash
-        found_event = threading.Event()
-        found_dest = [None]  # [destination_hash_bytes]
+        found_dests = []  # Collect all discovered seeders
+        found_lock = threading.Lock()
+        first_found = threading.Event()  # Signal when first seeder found
 
-        class GhostAnnounceHandler:
-            """Catch ALL announces and filter by ghost_hash in app_data."""
+        class SwarmAnnounceHandler:
+            """Collect ALL seeders that announce matching ghost_hash."""
             def __init__(self, target_ghost_hash):
                 self.aspect_filter = None  # Catch ALL announces
                 self._target = target_ghost_hash
@@ -304,24 +428,27 @@ class Leecher:
                         metadata = umsgpack.unpackb(app_data)
                         gh = metadata.get("ghost_hash", "")
                         if gh == self._target:
-                            # Announce = seeder is alive! Clear from blacklist
                             failed_dests.discard(destination_hash)
-                            RNS.log(
-                                f"Found seeder via announce: {RNS.prettyhexrep(destination_hash)}",
-                                RNS.LOG_INFO
-                            )
-                            found_dest[0] = destination_hash
-                            found_event.set()
+                            with found_lock:
+                                if destination_hash not in found_dests:
+                                    found_dests.append(destination_hash)
+                                    RNS.log(
+                                        f"Found seeder via announce: "
+                                        f"{RNS.prettyhexrep(destination_hash)} "
+                                        f"({len(found_dests)} total)",
+                                        RNS.LOG_INFO
+                                    )
+                            first_found.set()
                     except Exception:
                         pass
 
         # Register announce handler
-        handler = GhostAnnounceHandler(input_hash)
+        handler = SwarmAnnounceHandler(input_hash)
         RNS.Transport.register_announce_handler(handler)
 
         if failed_dests:
             RNS.log(
-                f"Searching mesh for alternative seeder "
+                f"Searching mesh for seeders "
                 f"({len(failed_dests)} failed)...",
                 RNS.LOG_INFO
             )
@@ -331,13 +458,8 @@ class Leecher:
                 RNS.LOG_INFO
             )
 
-        # === Discovery Strategy ===
-        # Ghost files: announce-only discovery (seeder_dest is just a hint)
-        # Direct dest hash: try path request + announce fallback
-        dest_hash = None
-        hint_dest = None  # Non-blocking hint from ghost file
-
         # Hint: request path for ghost file's seeder_dest (non-blocking)
+        hint_dest = None
         if self.ghost and self.ghost.seeder_dest:
             try:
                 candidate = bytes.fromhex(self.ghost.seeder_dest)
@@ -348,11 +470,12 @@ class Leecher:
                         RNS.LOG_INFO
                     )
                     RNS.Transport.request_path(candidate)
-                    hint_dest = candidate  # Just a hint, not blocking
+                    hint_dest = candidate
             except (ValueError, Exception):
                 pass
 
-        # Strategy: Direct dest hash from CLI (not ghost file)
+        # Direct dest hash from CLI (not ghost file)
+        dest_hash = None
         if not self.ghost:
             try:
                 candidate = bytes.fromhex(input_hash)
@@ -372,89 +495,89 @@ class Leecher:
                             real_ghost = metadata.get("ghost_hash")
                             if real_ghost:
                                 RNS.log(
-                                    f"Recovered ghost_hash from cache: {real_ghost}",
+                                    f"Recovered ghost_hash: {real_ghost}",
                                     RNS.LOG_INFO
                                 )
                                 self.ghost_hash = real_ghost
                                 handler._target = real_ghost
                         except Exception:
                             pass
-                elif candidate in failed_dests:
-                    RNS.log(
-                        f"Direct hash already failed, waiting for announce...",
-                        RNS.LOG_INFO
-                    )
             except (ValueError, Exception):
                 pass
 
-        # Wait for discovery — announce-first with hint fallback
-        retry_interval = 15
-        last_request = time.time()
-        attempt = 1
-        hint_checked = False
+        RNS.log("Waiting for seeder announces...", RNS.LOG_INFO)
+        discovery_window = config.DEFAULT_DISCOVERY_WINDOW
+        start_time = time.time()
 
-        RNS.log("Waiting for seeder announce...", RNS.LOG_INFO)
-
-        while not found_event.is_set():
-            # Check direct dest hash path (CLI mode only)
+        # Phase 1: Wait for first seeder (patient — up to 120s)
+        while not first_found.is_set() and self._running:
+            # Check CLI direct dest hash
             if dest_hash and dest_hash not in failed_dests:
                 if RNS.Transport.has_path(dest_hash):
                     hops = RNS.Transport.hops_to(dest_hash)
                     RNS.log(
-                        f"Path found via direct request! {hops} hops to seeder",
+                        f"Path found via direct request! {hops} hops",
                         RNS.LOG_INFO
                     )
-                    return dest_hash
+                    with found_lock:
+                        if dest_hash not in found_dests:
+                            found_dests.append(dest_hash)
+                    first_found.set()
+                    break
 
-            # Check hint path (ghost file seeder_dest) — only after 2s
-            # to give announces a chance to arrive first
-            if hint_dest and not hint_checked:
-                if time.time() - last_request > 2:
-                    hint_checked = True
+            # Check hint path after 2s
+            if hint_dest and hint_dest not in failed_dests:
+                if time.time() - start_time > 2:
                     if RNS.Transport.has_path(hint_dest):
                         hops = RNS.Transport.hops_to(hint_dest)
                         RNS.log(
-                            f"Hint seeder reachable ({hops} hops), trying...",
+                            f"Hint seeder reachable ({hops} hops)",
                             RNS.LOG_INFO
                         )
-                        return hint_dest
-
-            # Re-request path periodically (CLI direct hash only)
-            if dest_hash and dest_hash not in failed_dests:
-                if time.time() - last_request > retry_interval:
-                    attempt += 1
-                    RNS.log(
-                        f"Re-requesting path (attempt {attempt})...",
-                        RNS.LOG_INFO
-                    )
-                    RNS.Transport.request_path(dest_hash)
-                    last_request = time.time()
+                        with found_lock:
+                            if hint_dest not in found_dests:
+                                found_dests.append(hint_dest)
+                        first_found.set()
+                        break
 
             if not self._running:
-                return None
+                return []
             time.sleep(1)
 
-        if found_event.is_set() and found_dest[0]:
-            dest_hash = found_dest[0]
-            # Request path to the announced destination
-            if not RNS.Transport.has_path(dest_hash):
-                RNS.Transport.request_path(dest_hash)
-                path_start = time.time()
-                while not RNS.Transport.has_path(dest_hash):
-                    if time.time() - path_start > 60:
-                        self._fail("Path request failed after announce")
-                        return None
-                    time.sleep(0.5)
+        if not found_dests:
+            self._fail("No seeders found on mesh")
+            return []
 
-            hops = RNS.Transport.hops_to(dest_hash)
-            RNS.log(
-                f"Path found via announce! {hops} hops to seeder",
-                RNS.LOG_INFO
-            )
-            return dest_hash
+        # Phase 2: Discovery window — collect more seeders
+        RNS.log(
+            f"First seeder found! Waiting {discovery_window}s for more...",
+            RNS.LOG_INFO
+        )
+        window_start = time.time()
+        while time.time() - window_start < discovery_window:
+            if not self._running:
+                break
+            time.sleep(1)
 
-        self._fail("Seeder not found on mesh")
-        return None
+        # Request paths for all found destinations
+        for dh in found_dests:
+            if not RNS.Transport.has_path(dh):
+                RNS.Transport.request_path(dh)
+
+        # Wait for paths to resolve
+        path_deadline = time.time() + 10
+        for dh in list(found_dests):
+            while not RNS.Transport.has_path(dh):
+                if time.time() > path_deadline:
+                    found_dests.remove(dh)
+                    break
+                time.sleep(0.5)
+
+        RNS.log(
+            f"Discovery complete: {len(found_dests)} seeder(s) found",
+            RNS.LOG_INFO
+        )
+        return found_dests
 
     def _connect_to_seeder(self, destination_hash):
         """

@@ -31,6 +31,8 @@ DEFAULT_ANNOUNCE_INTERVAL = 60    # seconds (frequent for fast discovery)
 DEFAULT_TRANSFER_TIMEOUT = 120    # seconds (for data transfers)
 DEFAULT_LINK_TIMEOUT = 10         # seconds (for link establishment — fast failover)
 DEFAULT_PATH_TIMEOUT = 30         # seconds
+DEFAULT_DISCOVERY_WINDOW = 12     # seconds to collect seeders before starting
+MAX_SWARM_PEERS = 5               # max simultaneous peer connections
 
 # TCP/IP defaults for initial transport
 DEFAULT_TCP_HOST = "0.0.0.0"
