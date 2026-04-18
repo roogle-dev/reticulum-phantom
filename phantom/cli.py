@@ -197,6 +197,27 @@ def main():
         default=None
     )
 
+    # ─── phantom probe ────────────────────────────────────────────────────
+    probe_parser = subparsers.add_parser(
+        "probe",
+        help="Test mesh connectivity: send a want announce and watch for seeder responses"
+    )
+    probe_parser.add_argument(
+        "ghost_hash",
+        help="Ghost hash to probe (hex string)"
+    )
+    probe_parser.add_argument(
+        "-t", "--timeout",
+        help="How long to listen for responses (seconds, default: 60)",
+        type=int,
+        default=60
+    )
+    probe_parser.add_argument(
+        "--rns-config",
+        help="Path to custom Reticulum config directory",
+        default=None
+    )
+
     # ─── phantom tui ──────────────────────────────────────────────────────
     tui_parser = subparsers.add_parser(
         "tui",
@@ -244,6 +265,8 @@ def main():
             cmd_debug(args)
         elif args.command == "clean":
             cmd_clean(args)
+        elif args.command == "probe":
+            cmd_probe(args)
         elif args.command == "tui":
             try:
                 from phantom.tui import run_tui
@@ -955,6 +978,155 @@ def cmd_clean(args):
         )
     else:
         ui.print_info("Nothing to clean.")
+
+def cmd_probe(args):
+    """Handle: phantom probe <ghost_hash> — test if any seeder responds."""
+    ui.print_banner()
+
+    ghost_hash = args.ghost_hash
+    timeout = args.timeout
+
+    # Validate ghost hash
+    if len(ghost_hash) < 16:
+        ui.print_error("Ghost hash too short. Provide at least 16 hex chars.")
+        sys.exit(1)
+
+    ui.print_info(f"Probing mesh for ghost: {ghost_hash}")
+    ui.print_info(f"Listening for {timeout}s...")
+    ui.console.print()
+
+    # Start RNS
+    rns_config = getattr(args, 'rns_config', None)
+    network = PhantomNetwork(rns_config)
+    network.start()
+
+    pid = PhantomIdentity()
+    pid.load()
+    if not pid.is_loaded:
+        pid.create_new()
+
+    # Track responses
+    found = []
+    found_lock = threading.Lock()
+    probe_start = time.time()
+
+    # Register response handler
+    class ProbeResponseHandler:
+        def __init__(self):
+            self.aspect_filter = None
+            self.receive_path_responses = True
+
+        def received_announce(self, destination_hash, announced_identity, app_data):
+            if app_data:
+                try:
+                    metadata = umsgpack.unpackb(app_data)
+                    if not isinstance(metadata, dict):
+                        return
+                    if metadata.get("type") != "seeder":
+                        return
+                    gh = metadata.get("ghost_hash", "")
+                    if gh == ghost_hash:
+                        elapsed = time.time() - probe_start
+                        dest_hex = destination_hash.hex()
+                        identity_hex = announced_identity.hash.hex()
+                        with found_lock:
+                            if dest_hex not in [f["dest"] for f in found]:
+                                found.append({
+                                    "dest": dest_hex,
+                                    "identity": identity_hex,
+                                    "time": elapsed,
+                                })
+                                ui.console.print(
+                                    f"  [bold green]⚡ SEEDER RESPONDED![/bold green] "
+                                    f"({elapsed:.1f}s)\n"
+                                    f"    Dest:     {dest_hex}\n"
+                                    f"    Identity: {identity_hex}\n"
+                                )
+                except Exception:
+                    pass
+
+    handler = ProbeResponseHandler()
+    RNS.Transport.register_announce_handler(handler)
+
+    # Create want destination and send announce
+    want_dest = RNS.Destination(
+        pid.identity,
+        RNS.Destination.IN,
+        RNS.Destination.SINGLE,
+        config.RNS_APP_NAME,
+        "probe",
+        ghost_hash
+    )
+
+    announce_data = umsgpack.packb({
+        "ghost_hash": ghost_hash,
+        "type": "want",
+        "t": int(time.time()),
+    })
+
+    want_dest.announce(app_data=announce_data)
+    ui.console.print(f"  [cyan]📢 Want announced:[/cyan] {ghost_hash}")
+    ui.console.print(f"  [dim]Waiting for seeder responses...[/dim]")
+    ui.console.print()
+
+    # Also try path resolution if it looks like a dest hash
+    try:
+        dest_bytes = bytes.fromhex(ghost_hash)
+        if len(dest_bytes) == 16:
+            ui.console.print(f"  [dim]Also testing path resolution for {ghost_hash[:16]}...[/dim]")
+            path_found = RNS.Transport.await_path(dest_bytes, timeout=15)
+            if path_found:
+                hops = RNS.Transport.hops_to(dest_bytes)
+                ui.console.print(
+                    f"  [green]✓ Path resolved![/green] "
+                    f"{ghost_hash} — {hops} hop(s)\n"
+                )
+            else:
+                ui.console.print(
+                    f"  [yellow]✗ No path found[/yellow] for {ghost_hash[:16]}...\n"
+                )
+    except (ValueError, Exception):
+        pass
+
+    # Wait and re-announce periodically
+    try:
+        elapsed = 0
+        while elapsed < timeout:
+            time.sleep(5)
+            elapsed = time.time() - probe_start
+
+            if elapsed < timeout and int(elapsed) % 30 == 0:
+                announce_data = umsgpack.packb({
+                    "ghost_hash": ghost_hash,
+                    "type": "want",
+                    "t": int(time.time()),
+                })
+                want_dest.announce(app_data=announce_data)
+                ui.console.print(f"  [dim]📢 Re-announced want ({int(elapsed)}s)[/dim]")
+
+    except KeyboardInterrupt:
+        pass
+
+    # Summary
+    ui.console.print()
+    if found:
+        ui.console.print(
+            f"[bold green]✓ {len(found)} seeder(s) responded[/bold green]"
+        )
+        for f in found:
+            ui.console.print(
+                f"  dest:{f['dest'][:16]}... "
+                f"identity:{f['identity'][:16]}... "
+                f"({f['time']:.1f}s)"
+            )
+    else:
+        ui.console.print(
+            f"[bold red]✗ No seeders responded[/bold red] in {timeout}s"
+        )
+        ui.console.print(
+            "[dim]Check: are seeders running? Is the ghost hash correct? "
+            "Is the mesh connected?[/dim]"
+        )
 
 
 def cmd_debug(args):
