@@ -174,7 +174,7 @@ def create_download_progress():
         TextColumn("[bold blue]{task.description}"),
         BarColumn(bar_width=40),
         TaskProgressColumn(),
-        TransferSpeedColumn(),
+        TextColumn("{task.fields[speed]}"),
         TimeRemainingColumn(),
         console=console,
     )

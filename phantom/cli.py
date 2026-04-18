@@ -705,16 +705,38 @@ def cmd_download(args):
                 task_id = progress.add_task(
                     f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [{initial_chunks}/{total_chunks}]",
                     total=file_size,
-                    completed=initial_bytes  # Start here so speed calc is accurate
+                    completed=initial_bytes,
+                    speed=""
                 )
+
+                # Track speed from actual network bytes
+                speed_start = time.time()
+                last_net_bytes = leecher.bytes_received
+
                 while leecher.state == Leecher.STATE_DOWNLOADING:
-                    time.sleep(0.3)
+                    time.sleep(0.5)
                     chunks_done = leecher.chunks_received
                     chunk_bytes = int((chunks_done / total_chunks) * file_size)
+
+                    # Calculate real speed from network bytes
+                    elapsed = time.time() - speed_start
+                    net_bytes = leecher.bytes_received
+                    if elapsed > 0:
+                        speed = net_bytes / elapsed
+                        if speed > 1024 * 1024:
+                            speed_str = f"{speed / (1024*1024):.1f} MB/s"
+                        elif speed > 1024:
+                            speed_str = f"{speed / 1024:.1f} KB/s"
+                        else:
+                            speed_str = f"{speed:.0f} B/s"
+                    else:
+                        speed_str = "..."
+
                     progress.update(
                         task_id,
                         completed=chunk_bytes,
-                        description=f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [{chunks_done}/{total_chunks}]"
+                        description=f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [{chunks_done}/{total_chunks}]",
+                        speed=speed_str
                     )
 
         # Wait for assembling/completion
