@@ -72,6 +72,7 @@ class WantAnnounceHandler:
         # Using aspect_filter = None ensures we don't miss announces
         # due to RNS name-hash mismatch with dynamic aspects.
         self.aspect_filter = None
+        self.receive_path_responses = True  # Also catch path responses
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         """Called by RNS when ANY announcement is received."""
