@@ -37,6 +37,31 @@ from phantom.leecher import Leecher
 from phantom import ui
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Global exception hooks — prevent RNS thread crashes from killing the process
+# The Sideband Hub TCP socket sometimes drops (WinError 10038), causing
+# unhandled exceptions in RNS internal threads.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _thread_exception_hook(args):
+    """Catch unhandled exceptions in threads — log instead of crash."""
+    if args.exc_type == SystemExit:
+        return  # Allow normal exits
+    RNS.log(
+        f"Thread '{args.thread.name}' exception: {args.exc_value}",
+        RNS.LOG_ERROR
+    )
+
+def _global_exception_hook(exc_type, exc_value, exc_tb):
+    """Catch unhandled exceptions in main thread."""
+    if exc_type == KeyboardInterrupt:
+        sys.exit(0)
+    RNS.log(f"Unhandled exception: {exc_value}", RNS.LOG_ERROR)
+
+threading.excepthook = _thread_exception_hook
+sys.excepthook = _global_exception_hook
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
