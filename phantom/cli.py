@@ -170,6 +170,22 @@ def main():
         help="New value for the setting"
     )
 
+    # ─── phantom clean ────────────────────────────────────────────────────
+    clean_parser = subparsers.add_parser(
+        "clean",
+        help="Remove temporary files (chunks, downloads, ghosts)"
+    )
+    clean_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also remove ghost files from the library"
+    )
+    clean_parser.add_argument(
+        "--ghosts",
+        action="store_true",
+        help="Only remove ghost files from the library"
+    )
+
     # ─── phantom debug ────────────────────────────────────────────────────
     debug_parser = subparsers.add_parser(
         "debug",
@@ -226,6 +242,8 @@ def main():
             cmd_settings(args)
         elif args.command == "debug":
             cmd_debug(args)
+        elif args.command == "clean":
+            cmd_clean(args)
         elif args.command == "tui":
             try:
                 from phantom.tui import run_tui
@@ -717,6 +735,65 @@ def cmd_settings(args):
 
     # Always show current settings
     ui.print_settings(settings)
+
+
+def cmd_clean(args):
+    """Handle: phantom clean [--all] [--ghosts]"""
+    import shutil
+
+    ui.print_banner()
+    config.ensure_directories()
+
+    cleaned = 0
+    total_size = 0
+
+    def dir_size(path):
+        total = 0
+        for dirpath, dirnames, filenames in os.walk(path):
+            for f in filenames:
+                fp = os.path.join(dirpath, f)
+                total += os.path.getsize(fp)
+        return total
+
+    def clean_dir(path, label):
+        nonlocal cleaned, total_size
+        if os.path.isdir(path):
+            size = dir_size(path)
+            count = sum(len(files) for _, _, files in os.walk(path))
+            if count > 0:
+                total_size += size
+                cleaned += count
+                shutil.rmtree(path)
+                os.makedirs(path, exist_ok=True)
+                ui.print_success(
+                    f"Removed {label}: {count} files "
+                    f"({GhostFile._human_size(size)})"
+                )
+            else:
+                ui.console.print(f"  [dim]{label}: empty[/dim]")
+
+    if args.ghosts:
+        # Only remove ghosts
+        clean_dir(config.GHOSTS_DIR, "Ghost library")
+    else:
+        # Always clean chunks
+        clean_dir(config.CHUNKS_DIR, "Chunk cache")
+
+        # Always clean downloads
+        clean_dir(config.DOWNLOADS_DIR, "Downloads")
+
+        # Optionally clean ghosts
+        if getattr(args, 'all', False):
+            clean_dir(config.GHOSTS_DIR, "Ghost library")
+
+    if cleaned > 0:
+        ui.console.print()
+        ui.print_success(
+            f"Cleaned {cleaned} files, "
+            f"freed {GhostFile._human_size(total_size)}"
+        )
+    else:
+        ui.print_info("Nothing to clean.")
 
 
 def cmd_debug(args):
