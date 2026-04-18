@@ -636,11 +636,23 @@ def cmd_download(args):
     leecher.on_state_change = on_state_change
 
     # Determine if target is a .ghost file or a hash
-    if os.path.isfile(target) and target.endswith(config.GHOST_EXTENSION):
+    if target.endswith(config.GHOST_EXTENSION):
+        # User is trying to use a .ghost file
+        ghost_path = os.path.abspath(target)
+        if not os.path.isfile(ghost_path):
+            ui.print_error(f"Ghost file not found: {ghost_path}")
+            ui.console.print(
+                "[dim]Make sure the .ghost file exists at that path.[/dim]"
+            )
+            sys.exit(1)
+        ui.print_info(f"Loading ghost file: {ghost_path}")
+        leecher.download_from_ghost(ghost_path)
+    elif os.path.isfile(target):
+        # Maybe it's a ghost file without the extension check
         ui.print_info(f"Loading ghost file: {target}")
         leecher.download_from_ghost(os.path.abspath(target))
     else:
-        # Treat as a ghost hash
+        # Treat as a destination hash or ghost hash
         ui.print_download_started(target)
         leecher.download_from_hash(target)
 
