@@ -22,6 +22,9 @@ Phantom lets you share files over [Reticulum](https://reticulum.network/) — a 
 - **🆔 Cryptographic identity** — Your node ID is a persistent keypair, not an IP address
 - **📂 Multi-file seeding** — Seed your entire library simultaneously
 - **🖥️ Interactive TUI** — Full-screen terminal dashboard (optional)
+- **🐝 Multi-peer swarm** — Download from multiple seeders simultaneously
+- **🔄 Auto-failover** — If a seeder goes offline, others pick up instantly
+- **🌍 Zero-config mesh** — Auto-connects to the global Reticulum mesh via Sideband Hub
 
 ## Quick Start
 
@@ -91,7 +94,7 @@ The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with 
 │                (email, USB, Discord, whatever)                   │
 │                                                                 │
 │   4. Download: phantom download movie.mkv.ghost                │
-│                → auto-discovers seeder, downloads, verifies     │
+│                → auto-discovers ALL seeders, downloads in swarm │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -197,8 +200,9 @@ python phantom.py
 
 The TUI provides a full-screen dashboard with:
 - Real-time transfer monitoring (seed/download)
-- Ghost file browser
-- Network status and identity display
+- Ghost file browser with auto-seeding
+- Network status with node filtering
+- Mesh peer discovery
 - Settings panel
 
 > **Note:** The TUI requires `textual`. Install with `pip install textual`. All other commands work without it.
@@ -232,51 +236,74 @@ The **ghost hash** (first 16 bytes of the file's SHA-256) is the unique identifi
 
 ## How It Works
 
+### Multi-Peer Swarm
+
 ```
- Seeder                              Reticulum Mesh                        Leecher
-┌────────┐                          ┌──────────────┐                     ┌────────┐
-│ Create │  announce(ghost_hash)    │              │  listen for         │ Load   │
-│ .ghost ├─────────────────────────►│   Transport  │  announces         │ .ghost │
-│  file  │                          │    Nodes     │◄────────────────────┤  file  │
-└───┬────┘                          └──────┬───────┘                     └───┬────┘
-    │                                      │                                 │
-    │  E2E Encrypted Link (X25519)         │  path_found!                    │
-    │◄─────────────────────────────────────┼─────────────────────────────────┤
-    │                                      │                                 │
-    │  request("manifest")                 │                                 │
-    │◄─────────────────────────────────────┼─────────────────────────────────┤
-    │  response(ghost_metadata)            │                                 │
-    ├──────────────────────────────────────┼────────────────────────────────►│
-    │                                      │                                 │
-    │  request("chunk", index=0)           │                                 │
-    │◄─────────────────────────────────────┼─────────────────────────────────┤
-    │  response(chunk_data)                │                                 │
-    ├──────────────────────────────────────┼────────────────────────────────►│
-    │  ... repeat for all chunks ...       │                                 │
-    │                                      │                          ┌─────┴─────┐
-    │                                      │                          │ Assemble  │
-    │                                      │                          │ & Verify  │
-    │                                      │                          └───────────┘
+ Seeder A                                                    Leecher
+┌────────┐  announce("ghost_hash=6944...")                  ┌────────┐
+│ seed   ├──────────────────────────────────────────────────►│ listen │
+│ movie  │                    Reticulum Mesh                │ for    │
+└────────┘                   ┌──────────────┐              │ ghost  │
+                             │   Transport  │              │ hash   │
+ Seeder B                    │    Nodes     │              └───┬────┘
+┌────────┐  announce         │   (Sideband) │                  │
+│ seed   ├──────────────────►│              │  5s discovery    │
+│ movie  │                   └──────────────┘  window          │
+└────────┘                                                     │
+                                                               │
+     ┌─────────────────────────────────────────────────────────┤
+     │              Connect to ALL seeders                     │
+     ▼                                                         ▼
+ ┌────────┐  chunks 0-350                               ┌────────┐
+ │Seeder A├────────────────────────────────────────────►│        │
+ └────────┘                                             │ Merge  │
+                                                        │ chunks │
+ ┌────────┐  chunks 351-702                             │ verify │
+ │Seeder B├────────────────────────────────────────────►│ hash   │
+ └────────┘                                             └────────┘
 ```
+
+**More seeders = faster downloads.** Chunks are distributed across all peers automatically.
 
 ### Discovery
 
-Phantom uses two strategies to find seeders:
+Phantom uses **announce-first discovery**:
 
-1. **Announce-based** — Seeders broadcast their ghost_hash. Leechers listen for matching announces (like DHT in BitTorrent).
-2. **Direct path** — If you have a destination hash, the leecher requests the path directly.
+1. **Seeders announce** — Every 60 seconds, seeders broadcast "I have ghost_hash X" on the mesh
+2. **Leecher discovers** — Collects ALL seeders during a 5-second discovery window
+3. **Continuous discovery** — New seeders joining during download are automatically added to the swarm
+4. **Auto-failover** — If a seeder dies, its chunks redistribute to remaining peers
 
-The discovery is **patient** — it keeps retrying every 15 seconds until the seeder is found. No timeouts, no failures. Just wait for the mesh to connect.
+No hardcoded addresses. No single points of failure. Pure mesh discovery.
 
 ### Architecture
 
 1. **Identity** — Each node has a persistent X25519/Ed25519 keypair
 2. **Ghost File** — Metadata descriptor with per-chunk SHA-256 hashes
 3. **Seeder** — Creates a unique RNS destination per file, announces on the mesh, serves chunks
-4. **Leecher** — Discovers seeders via announce handler or direct path, downloads verified chunks
+4. **Leecher** — Discovers seeders via announce handler, downloads verified chunks from swarm
 5. **Engine** — Thread-safe background manager for multiple concurrent seeders/leechers
 6. **TUI** — Interactive terminal dashboard built with Textual (optional)
-7. **Network** — Thin wrapper over `RNS.Reticulum` for transport management
+7. **Network** — Auto-configures Sideband Hub for global mesh connectivity
+
+---
+
+## Network Configuration
+
+Phantom **auto-configures** the [Sideband Hub](https://unsigned.io/sideband/) on first run for instant global mesh connectivity. No manual setup needed!
+
+If you want to customize your Reticulum config (`~/.reticulum/config`):
+
+```ini
+# Already auto-added by Phantom:
+[[Sideband Hub]]
+    type = TCPClientInterface
+    enabled = yes
+    target_host = sideband.connect.reticulum.network
+    target_port = 7822
+```
+
+See the [Reticulum documentation](https://markqvist.github.io/Reticulum/manual/) for full networking configuration.
 
 ---
 
@@ -297,7 +324,7 @@ python phantom.py settings tcp_port 8888
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `chunk_size` | 1048576 (1MB) | File chunk size in bytes |
-| `announce_interval` | 300 (5min) | Re-announce interval in seconds |
+| `announce_interval` | 60 (1min) | Re-announce interval in seconds |
 | `transfer_timeout` | 120 (2min) | Transfer timeout in seconds |
 | `auto_seed_after_download` | true | Auto-seed after downloading |
 | `tcp_enabled` | true | Enable TCP/IP transport |
@@ -306,25 +333,6 @@ python phantom.py settings tcp_port 8888
 | `max_concurrent_transfers` | 3 | Max simultaneous transfers |
 | `download_directory` | (platform) | Where to save downloads |
 | `log_level` | info | Logging verbosity |
-
----
-
-## Network Configuration
-
-Phantom uses Reticulum for all networking. By default, it uses `AutoInterface` to discover peers on the local network.
-
-For internet-wide sharing, add a TCP hub to your Reticulum config (`~/.reticulum/config`):
-
-```ini
-# Connect to the public Sideband relay hub
-[[Sideband Hub]]
-    type = TCPClientInterface
-    enabled = yes
-    target_host = sideband.connect.reticulum.network
-    target_port = 7822
-```
-
-See the [Reticulum documentation](https://markqvist.github.io/Reticulum/manual/) for full networking configuration.
 
 ---
 
@@ -340,18 +348,19 @@ python phantom.py seed testfile.txt
 python phantom.py seed-all /path/to/files/
 ```
 
-### PC-B (Leecher)
+### PC-B (Second Seeder)
+```bash
+# Copy the .ghost file from PC-A and the original file, then:
+python phantom.py seed-all
+```
+
+### PC-C (Leecher — Downloads from BOTH)
 ```bash
 # Copy the .ghost file from PC-A, then:
 python phantom.py download testfile.txt.ghost -o ~/Desktop
+# → Discovers both PC-A and PC-B
+# → Downloads chunks from both simultaneously!
 ```
-
-### PC-C (Second Leecher)
-```bash
-python phantom.py download testfile.txt.ghost -o ~/Desktop
-```
-
-Both leechers connect to the seeder simultaneously!
 
 ---
 
@@ -396,8 +405,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.1** — Core: `.ghost` files, identity, single-peer seed/download, CLI
 - [x] **v0.2** — Multi-file seeding: `seed-all`, ghost library, source path tracking
 - [x] **v0.3** — TUI dashboard: interactive terminal interface with Textual
-- [x] **v0.4** — Patient discovery: announce-based + direct path, no timeouts
-- [ ] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders
+- [x] **v0.4** — Patient discovery: announce-based + direct path, auto-failover
+- [x] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders, continuous discovery
 - [ ] **v0.6** — LXMF integration: offline chunk caching via propagation nodes
 - [ ] **v0.7** — DHT-like peer discovery and reputation system
 
