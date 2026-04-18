@@ -695,14 +695,21 @@ def cmd_download(args):
 
         if leecher.state == Leecher.STATE_DOWNLOADING:
             with progress:
-                file_size = leecher.ghost.file_size if leecher.ghost else leecher.total_chunks * 1024 * 1024
+                total_chunks = leecher.total_chunks if leecher.total_chunks else 1
                 task_id = progress.add_task(
-                    f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [0/{leecher.total_chunks}]",
-                    total=file_size
+                    f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [0/{total_chunks}]",
+                    total=leecher.ghost.file_size if leecher.ghost else total_chunks * 1024 * 1024
                 )
                 while leecher.state == Leecher.STATE_DOWNLOADING:
                     time.sleep(0.3)
-                    progress.update(task_id, completed=leecher.bytes_received)
+                    # Use chunk-based progress to correctly handle resumed downloads
+                    chunks_done = leecher.chunks_received
+                    chunk_bytes = int((chunks_done / total_chunks) * (leecher.ghost.file_size if leecher.ghost else total_chunks * 1024 * 1024))
+                    progress.update(
+                        task_id,
+                        completed=chunk_bytes,
+                        description=f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [{chunks_done}/{total_chunks}]"
+                    )
 
         # Wait for assembling/completion
         while leecher.state == Leecher.STATE_ASSEMBLING:
