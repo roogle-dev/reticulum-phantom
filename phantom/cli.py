@@ -1209,6 +1209,37 @@ def cmd_debug(args):
     if pid.is_loaded:
         ui.print_info(f"Identity: {pid.hash_pretty}")
 
+    # Show announce rate table (rate limiting visibility)
+    ui.console.print()
+    ui.console.print("[bold cyan]═══ Announce Rate Table ═══[/bold cyan]")
+    try:
+        rate_table = RNS.Transport.announce_rate_table
+        if rate_table:
+            now = time.time()
+            for dest_hash, entry in rate_table.items():
+                dest_hex = dest_hash.hex()
+                violations = entry.get("rate_violations", 0)
+                blocked_until = entry.get("blocked_until", 0)
+                last = entry.get("last", 0)
+
+                if blocked_until > now:
+                    remaining = int(blocked_until - now)
+                    status_str = f"[bold red]BLOCKED ({remaining}s remaining)[/bold red]"
+                elif violations > 0:
+                    status_str = f"[yellow]{violations} violation(s)[/yellow]"
+                else:
+                    status_str = "[green]OK[/green]"
+
+                ui.console.print(
+                    f"  {dest_hex[:16]}... | "
+                    f"Last: {int(now - last)}s ago | "
+                    f"{status_str}"
+                )
+        else:
+            ui.console.print("  [dim]No entries — no announces tracked yet[/dim]")
+    except Exception as e:
+        ui.console.print(f"  [dim]Could not read rate table: {e}[/dim]")
+
     ui.console.print()
     ui.console.print("[dim]Listening for mesh activity... (Ctrl+C to exit)[/dim]")
     ui.console.print()
