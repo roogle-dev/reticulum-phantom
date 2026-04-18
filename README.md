@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Reticulum](https://img.shields.io/badge/Reticulum-Mesh_Network-purple.svg)](https://reticulum.network/)
+[![Version](https://img.shields.io/badge/v0.6.3-Stable-green.svg)](#roadmap)
 
 ---
 
@@ -25,6 +26,8 @@ Phantom lets you share files over [Reticulum](https://reticulum.network/) — a 
 - **🐝 Multi-peer swarm** — Download from multiple seeders simultaneously
 - **🔄 Auto-failover** — If a seeder goes offline, others pick up instantly
 - **🌍 Zero-config mesh** — Auto-connects to the global Reticulum mesh via Sideband Hub
+- **📋 Multi-seeder ghost files** — Like multi-tracker torrents, ghost files store all known seeders for resilience
+- **⏸️ Resume support** — Downloads pick up where they left off, with accurate progress tracking
 
 ## Quick Start
 
@@ -45,59 +48,69 @@ pip install -e .
 pip install textual
 ```
 
-### Create Your Identity
+### Share a File (2 steps)
 
 ```bash
-# Create a new Phantom identity (first time only)
-python phantom.py identity --new
+# 1. Seed a file (auto-creates .ghost file next to the original)
+python phantom.py seed movie.mkv
+#   → movie.mkv.ghost created (share THIS with friends)
+#   → Seeding on the mesh...
+
+# 2. Share the .ghost file with your friend (email, USB, Discord, etc.)
 ```
 
-### Share a File
-
-```bash
-# Create a .ghost file and start seeding
-python phantom.py create myfile.zip
-python phantom.py seed myfile.zip
-# → Outputs: Ghost Hash: a1b2c3d4e5f6...
-#            Destination: <138e6b9ca155dd6f...>
-```
+That's it. `seed` auto-creates your identity, the ghost file, and connects to the global mesh.
 
 ### Download a File
 
 ```bash
 # Download using a .ghost file (like opening a .torrent)
-python phantom.py download myfile.zip.ghost
-
-# Download using a destination hash
-python phantom.py download 138e6b9ca155dd6f592dd8507601c5c5
+python phantom.py download movie.mkv.ghost
 
 # Download to a specific folder
-python phantom.py download myfile.zip.ghost -o ~/Downloads
+python phantom.py download movie.mkv.ghost -o ~/Downloads
 ```
 
 ---
 
 ## The .ghost Workflow
 
-The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with anyone — they use it to find your seeder on the mesh and download the file.
+The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with anyone — they use it to find seeders on the mesh and download the file.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│   1. Create:   phantom create movie.mkv                        │
-│                → creates movie.mkv.ghost (tiny metadata file)   │
-│                                                                 │
-│   2. Seed:     phantom seed movie.mkv                          │
+│   1. Seed:     phantom seed movie.mkv                          │
+│                → creates movie.mkv.ghost next to the file       │
 │                → announces on mesh, serves chunks               │
 │                                                                 │
-│   3. Share:    Send movie.mkv.ghost to your friend              │
+│   2. Share:    Send movie.mkv.ghost to your friend              │
 │                (email, USB, Discord, whatever)                   │
 │                                                                 │
-│   4. Download: phantom download movie.mkv.ghost                │
+│   3. Download: phantom download movie.mkv.ghost                │
 │                → auto-discovers ALL seeders, downloads in swarm │
+│                                                                 │
+│   4. Re-seed:  phantom seed movie.mkv                          │
+│                → your dest is added to the ghost file           │
+│                → share YOUR ghost file — now has 2 seeders!     │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+### Multi-Seeder Resilience
+
+Ghost files accumulate seeder destinations over time, like torrents with multiple trackers:
+
+```
+movie.mkv.ghost
+├── seeder_dests: [
+│   "8543cc3d..."  ← Original seeder (you)
+│   "a1b2c3d4..."  ← Friend A (downloaded + re-seeded)
+│   "e5f6a7b8..."  ← Friend B (downloaded + re-seeded)
+│ ]
+```
+
+When downloading, Phantom tries **all** known seeders. If the original goes offline, any re-seeder works.
 
 ---
 
@@ -105,13 +118,13 @@ The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with 
 
 | Command | Description |
 |---------|-------------|
-| `phantom create <file>` | Convert a file to `.ghost` format |
+| `phantom seed <file>` | Start seeding a file (auto-creates .ghost) |
+| `phantom seed-all [dir]` | Seed all files in a directory or ghost library |
+| `phantom download <target>` | Download by .ghost file or destination hash |
+| `phantom create <file>` | Create a .ghost file without seeding |
 | `phantom info <ghost_file>` | Display `.ghost` file metadata |
 | `phantom identity` | Show your node identity |
 | `phantom identity --new` | Create a new identity |
-| `phantom seed <file>` | Start seeding a file on the mesh |
-| `phantom seed-all [dir]` | Seed all files in a directory or ghost library |
-| `phantom download <target>` | Download by ghost hash, dest hash, or .ghost file |
 | `phantom clean` | Remove temporary chunks and downloads |
 | `phantom settings` | View/edit settings |
 | `phantom debug` | Live Reticulum debug log |
@@ -119,27 +132,13 @@ The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with 
 
 ### Command Details
 
-#### `phantom create`
+#### `phantom seed` (recommended)
 ```bash
-python phantom.py create myfile.zip
-python phantom.py create myfile.zip -c "My awesome file"
-python phantom.py create myfile.zip -o /path/to/output.ghost
-python phantom.py create myfile.zip --chunk-size 262144  # 256KB chunks
-```
+# Seed a file — auto-creates .ghost, connects to mesh, starts serving
+python phantom.py seed movie.mkv
 
-#### `phantom seed`
-```bash
-# Seed a regular file (auto-creates .ghost)
-python phantom.py seed myfile.zip
-
-# Seed using an existing .ghost file
-python phantom.py seed myfile.zip.ghost
-```
-
-#### `phantom seed-all`
-```bash
-# Seed all .ghost files from your library
-python phantom.py seed-all
+# Seed from an existing .ghost file
+python phantom.py seed movie.mkv.ghost
 
 # Seed all files in a directory
 python phantom.py seed-all /path/to/movies/
@@ -160,6 +159,15 @@ python phantom.py download 138e6b9ca155dd6f592dd8507601c5c5
 
 # Download to a specific directory
 python phantom.py download movie.mkv.ghost -o ~/Desktop
+```
+
+#### `phantom create`
+```bash
+# Create a .ghost file without seeding
+python phantom.py create myfile.zip
+python phantom.py create myfile.zip -c "My awesome file"
+python phantom.py create myfile.zip -o /path/to/output.ghost
+python phantom.py create myfile.zip --chunk-size 262144  # 256KB chunks
 ```
 
 #### `phantom clean`
@@ -193,9 +201,6 @@ python phantom.py identity --import-file ~/phantom_backup.key
 ```bash
 # Launch the interactive TUI dashboard
 python phantom.py tui
-
-# Or just run without arguments (defaults to TUI if textual is installed)
-python phantom.py
 ```
 
 The TUI provides a full-screen dashboard with:
@@ -214,37 +219,49 @@ The TUI provides a full-screen dashboard with:
 A `.ghost` file is a compact [msgpack](https://msgpack.org/)-encoded binary containing:
 
 ```
-┌─────────────────────────────────────┐
-│ ghost_version: 1                    │
-│ name: "ubuntu-24.04-desktop.iso"    │
-│ file_size: 4800000000               │
-│ chunk_size: 1048576  (1MB)          │
-│ chunk_count: 4578                   │
-│ file_hash: "sha256..."             │
-│ chunk_hashes: ["sha256...", ...]    │
-│ source_path: "/home/user/file.iso"  │
-│ created_at: 1713420000              │
-│ created_by: "identity_hash"         │
-│ comment: "Official Ubuntu ISO"      │
-│ app_name: "phantom"                 │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────┐
+│ ghost_version: 1                     │
+│ name: "ubuntu-24.04-desktop.iso"     │
+│ file_size: 4800000000                │
+│ chunk_size: 1048576  (1MB)           │
+│ chunk_count: 4578                    │
+│ file_hash: "sha256..."              │
+│ chunk_hashes: ["sha256...", ...]     │
+│ created_at: 1713420000               │
+│ created_by: "identity_hash"          │
+│ comment: "Official Ubuntu ISO"       │
+│ seeder_dest: "8543cc3d..."           │  ← Primary seeder
+│ seeder_dests: ["8543cc3d...", ...]    │  ← ALL known seeders
+│ app_name: "phantom"                  │
+└──────────────────────────────────────┘
 ```
 
 The **ghost hash** (first 16 bytes of the file's SHA-256) is the unique identifier used for mesh discovery.
+
+> **Privacy:** `source_path` is intentionally excluded from the ghost file to avoid exposing filesystem paths.
 
 ---
 
 ## How It Works
 
+### Discovery
+
+Phantom uses a **dual discovery strategy**:
+
+1. **Direct path resolution (fast)** — The .ghost file contains known seeder destinations. The leecher uses `await_path()` to resolve the path through the mesh — typically connects in 1-2 seconds
+2. **Announce-based discovery (fallback)** — Leecher broadcasts "I want ghost_hash X" as an RNS announce. Seeders listening for wants re-announce themselves. Works even when all known seeders are offline
+3. **Continuous discovery** — New seeders joining during download are automatically detected and added to the swarm
+4. **Auto-failover** — If a seeder dies mid-transfer, its chunks redistribute to remaining peers
+
 ### Multi-Peer Swarm
 
 ```
  Seeder A                                                    Leecher
-┌────────┐  announce("ghost_hash=6944...")                  ┌────────┐
+┌────────┐  announce(type="seeder", ghost_hash=...)          ┌────────┐
 │ seed   ├──────────────────────────────────────────────────►│ listen │
 │ movie  │                    Reticulum Mesh                │ for    │
-└────────┘                   ┌──────────────┐              │ ghost  │
-                             │   Transport  │              │ hash   │
+└────────┘                   ┌──────────────┐              │ type=  │
+                             │   Transport  │              │ seeder │
  Seeder B                    │    Nodes     │              └───┬────┘
 ┌────────┐  announce         │   (Sideband) │                  │
 │ seed   ├──────────────────►│              │  5s discovery    │
@@ -265,27 +282,15 @@ The **ghost hash** (first 16 bytes of the file's SHA-256) is the unique identifi
 
 **More seeders = faster downloads.** Chunks are distributed across all peers automatically.
 
-### Discovery
-
-Phantom uses **announce-first discovery**:
-
-1. **Seeders announce** — On startup and every 30 minutes, seeders broadcast "I have ghost_hash X" on the mesh
-2. **Leecher discovers** — Collects ALL seeders during a 5-second discovery window
-3. **Continuous discovery** — New seeders joining during download are automatically added to the swarm
-4. **Auto-failover** — If a seeder dies, its chunks redistribute to remaining peers
-5. **Staggered announces** — When seeding multiple files, announces are spaced 2 seconds apart to avoid flooding the mesh
-
-No hardcoded addresses. No single points of failure. Pure mesh discovery.
-
 ### Architecture
 
 1. **Identity** — Each node has a persistent X25519/Ed25519 keypair
-2. **Ghost File** — Metadata descriptor with per-chunk SHA-256 hashes
-3. **Seeder** — Creates a unique RNS destination per file, announces on the mesh, serves chunks
-4. **Leecher** — Discovers seeders via announce handler, downloads verified chunks from swarm
+2. **Ghost File** — Metadata descriptor with per-chunk SHA-256 hashes + multi-seeder destinations
+3. **Seeder** — Creates a unique RNS destination per file, announces with `type: "seeder"` on the mesh
+4. **Leecher** — Discovers seeders via direct path + announce handler, filters by `type` to avoid leecher-to-leecher confusion
 5. **Engine** — Thread-safe background manager for multiple concurrent seeders/leechers
 6. **TUI** — Interactive terminal dashboard built with Textual (optional)
-7. **Network** — Auto-configures Sideband Hub for global mesh connectivity
+7. **Network** — Auto-configures Sideband Hub for global mesh connectivity, auto-disables AutoInterface on Windows
 
 ---
 
@@ -341,42 +346,41 @@ python phantom.py settings tcp_port 8888
 
 ### PC-A (Seeder)
 ```bash
-# Create ghost and seed
-python phantom.py create testfile.txt
-python phantom.py seed testfile.txt
-
-# Or seed everything at once
+# Seed a directory of files (ghost files created automatically beside each file)
 python phantom.py seed-all /path/to/files/
 ```
 
 ### PC-B (Second Seeder)
 ```bash
 # Copy the .ghost file from PC-A and the original file, then:
-python phantom.py seed-all
+python phantom.py seed movie.mkv
+# → Your dest is ADDED to seeder_dests list
 ```
 
 ### PC-C (Leecher — Downloads from BOTH)
 ```bash
-# Copy the .ghost file from PC-A, then:
-python phantom.py download testfile.txt.ghost -o ~/Desktop
-# → Discovers both PC-A and PC-B
-# → Downloads chunks from both simultaneously!
+# Copy the .ghost file from PC-B (has both A and B as seeders), then:
+python phantom.py download movie.mkv.ghost -o ~/Desktop
+# → Tries both PC-A and PC-B destinations
+# → Downloads chunks from all reachable seeders simultaneously!
 ```
 
 ---
 
 ## Platform Support
 
-| Platform | Status |
-|----------|--------|
-| Windows  | ✅ Supported |
-| macOS    | ✅ Supported |
-| Linux    | ✅ Supported |
+| Platform | Status | Notes |
+|----------|--------|-------|
+| Windows  | ✅ Tested | AutoInterface auto-disabled (IPv6 label fix) |
+| Linux    | ✅ Tested | Field-tested (Ubuntu <→ Windows cross-mesh) |
+| macOS    | ✅ Supported | Untested, should work |
 
 Data is stored in platform-appropriate locations:
 - **Windows**: `%APPDATA%\ReticulumPhantom\`
 - **macOS**: `~/Library/Application Support/ReticulumPhantom/`
 - **Linux**: `~/.local/share/reticulum-phantom/`
+
+Ghost files are **also saved next to the source file** for easy access and sharing.
 
 ---
 
@@ -408,8 +412,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.3** — TUI dashboard: interactive terminal interface with Textual
 - [x] **v0.4** — Patient discovery: announce-based + direct path, auto-failover
 - [x] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders, continuous discovery
-- [ ] **v0.6** — LXMF integration: offline chunk caching via propagation nodes
-- [ ] **v0.7** — DHT-like peer discovery and reputation system
+- [x] **v0.6** — Global mesh: auto-config Sideband Hub, multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested *(current)*
+- [ ] **v0.7** — LXMF integration: offline chunk caching via propagation nodes
+- [ ] **v0.8** — DHT-like peer discovery and reputation system
 
 ---
 

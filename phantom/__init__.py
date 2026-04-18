@@ -9,6 +9,6 @@ File format: .ghost
 CLI command: phantom
 """
 
-__version__ = "0.6.2"
+__version__ = "0.6.3"
 __app_name__ = "phantom"
 __author__ = "Reticulum Phantom Contributors"
