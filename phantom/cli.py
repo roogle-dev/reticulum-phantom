@@ -297,12 +297,20 @@ def cmd_create(args):
         ui.print_error("Failed to create ghost file")
         sys.exit(1)
 
-    # Save it
+    # Save it — next to source file AND to the ghost library
     output_path = args.output
     if output_path is None:
         output_path = filepath + config.GHOST_EXTENSION
 
     saved_path = ghost.save(output_path)
+
+    # Also save to ghost library (for seed-all)
+    config.ensure_directories()
+    library_path = os.path.join(
+        config.GHOSTS_DIR, ghost.name + config.GHOST_EXTENSION
+    )
+    if os.path.abspath(output_path) != os.path.abspath(library_path):
+        ghost.save(library_path)
     if saved_path:
         ui.print_ghost_created(saved_path, ghost.get_info_dict())
     else:
