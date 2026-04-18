@@ -293,9 +293,9 @@ class Leecher:
         found_dest = [None]  # [destination_hash_bytes]
 
         class GhostAnnounceHandler:
-            """RNS-compatible announce handler that filters by ghost_hash."""
+            """Catch ALL announces and filter by ghost_hash in app_data."""
             def __init__(self, target_ghost_hash):
-                self.aspect_filter = config.RNS_APP_NAME + ".swarm"
+                self.aspect_filter = None  # Catch ALL announces
                 self._target = target_ghost_hash
 
             def received_announce(self, destination_hash, announced_identity, app_data):
