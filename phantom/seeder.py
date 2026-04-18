@@ -408,6 +408,9 @@ class Seeder:
             "created_at": self.ghost.created_at,
             "created_by": self.ghost.created_by,
             "comment": self.ghost.comment,
+            # Share ALL known seeder dests so leecher can connect to swarm
+            "seeder_dest": self.ghost.seeder_dest,
+            "seeder_dests": list(self.ghost.seeder_dests),
         }
 
         return umsgpack.packb(manifest)

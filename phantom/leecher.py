@@ -203,6 +203,32 @@ class Leecher:
                         time.sleep(2)
                         continue
 
+                    # After manifest: connect to additional seeders we just learned about
+                    if self.ghost and self.ghost.seeder_dests:
+                        new_dests = []
+                        already_connected = {dh for dh, _ in active_links}
+                        for dest_hex in self.ghost.seeder_dests:
+                            try:
+                                dest_bytes = bytes.fromhex(dest_hex)
+                                if (len(dest_bytes) == 16
+                                        and dest_bytes not in already_connected
+                                        and dest_bytes not in failed_dests):
+                                    new_dests.append(dest_bytes)
+                            except (ValueError, Exception):
+                                pass
+
+                        if new_dests:
+                            RNS.log(
+                                f"Manifest revealed {len(new_dests)} additional seeder(s), connecting...",
+                                RNS.LOG_INFO
+                            )
+                            extra_links = self._connect_to_seeders(new_dests, failed_dests)
+                            active_links.extend(extra_links)
+                            RNS.log(
+                                f"Swarm: {len(active_links)} total peer(s) connected",
+                                RNS.LOG_INFO
+                            )
+
                 # Step 4: Download chunks from ALL peers
                 self._set_state(self.STATE_DOWNLOADING)
                 success = self._swarm_download(active_links, failed_dests)
@@ -900,16 +926,28 @@ class Leecher:
             self.ghost.created_by = manifest.get("created_by", "")
             self.ghost.comment = manifest.get("comment", "")
 
+            # Learn about other seeders from the manifest
+            self.ghost.seeder_dest = manifest.get("seeder_dest", "")
+            manifest_dests = manifest.get("seeder_dests", [])
+            if manifest_dests:
+                for d in manifest_dests:
+                    if d and d not in self.ghost.seeder_dests:
+                        self.ghost.seeder_dests.append(d)
+            # Backward compat
+            if self.ghost.seeder_dest and self.ghost.seeder_dest not in self.ghost.seeder_dests:
+                self.ghost.seeder_dests.append(self.ghost.seeder_dest)
+
             self.total_chunks = self.ghost.chunk_count
             self.chunker = Chunker(self.ghost)
 
-            # Save the ghost file locally
+            # Save the ghost file locally (with updated seeder_dests)
             self.ghost.save()
 
             RNS.log(
                 f"Manifest received: {self.ghost.name} "
                 f"({self.ghost.chunk_count} chunks, "
-                f"{GhostFile._human_size(self.ghost.file_size)})",
+                f"{GhostFile._human_size(self.ghost.file_size)}, "
+                f"{len(self.ghost.seeder_dests)} known seeder(s))",
                 RNS.LOG_INFO
             )
             return True
