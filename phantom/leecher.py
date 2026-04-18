@@ -567,8 +567,30 @@ class Leecher:
             input_hash
         )
 
-        # ── Announce "I want X" ──────────────────────────────────
-        announce_data = umsgpack.packb({"ghost_hash": input_hash})
+        # ── Hint dest from .ghost file (primary discovery) ───────
+        # Announces don't reliably propagate cross-machine through
+        # Sideband Hub. Direct path requests DO work, so hint_dest
+        # from the .ghost file is our primary mechanism.
+        hint_dest = None
+        if self.ghost and self.ghost.seeder_dest:
+            try:
+                candidate = bytes.fromhex(self.ghost.seeder_dest)
+                if len(candidate) == 16 and candidate not in failed_dests:
+                    hint_dest = candidate
+                    RNS.log(
+                        f"Requesting path to seeder: "
+                        f"{self.ghost.seeder_dest[:16]}...",
+                        RNS.LOG_INFO
+                    )
+                    RNS.Transport.request_path(candidate)
+            except (ValueError, Exception):
+                pass
+
+        # ── Announce "I want X" (fallback + future PEX) ──────────
+        announce_data = umsgpack.packb({
+            "ghost_hash": input_hash,
+            "t": int(time.time()),
+        })
         want_dest.announce(app_data=announce_data)
 
         RNS.log(
@@ -577,17 +599,40 @@ class Leecher:
             RNS.LOG_INFO
         )
 
-        # ── Wait for seeder responses (no timeout — retries forever) ─
+        # ── Wait for seeder (hint path or announce response) ─────
         last_announce = time.time()
 
         while not first_found.is_set() and self._running:
-            # Re-announce periodically
+            # Check hint_dest path
+            if hint_dest and hint_dest not in failed_dests:
+                if RNS.Transport.has_path(hint_dest):
+                    with found_lock:
+                        if hint_dest not in found_dests:
+                            found_dests.append(hint_dest)
+                            RNS.log(
+                                f"Seeder path resolved: "
+                                f"{RNS.prettyhexrep(hint_dest)}",
+                                RNS.LOG_INFO
+                            )
+                    first_found.set()
+                    break
+
+            # Re-announce want periodically (for announce-based discovery)
             if time.time() - last_announce > config.WANT_ANNOUNCE_INTERVAL:
+                announce_data = umsgpack.packb({
+                    "ghost_hash": input_hash,
+                    "t": int(time.time()),
+                })
                 want_dest.announce(app_data=announce_data)
                 last_announce = time.time()
+
+                # Also re-request hint path in case it timed out
+                if hint_dest and hint_dest not in failed_dests:
+                    RNS.Transport.request_path(hint_dest)
+
                 RNS.log(
                     f"📢 Re-announced want for {input_hash[:16]}...",
-                    RNS.LOG_DEBUG
+                    RNS.LOG_INFO
                 )
 
             time.sleep(1)
