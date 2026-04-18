@@ -208,16 +208,20 @@ class Leecher:
         """
         Find a path to a seeder on the mesh.
 
+        The user provides the destination hash (from seeder output).
+        We discover the path, then recall the announce app_data to
+        extract the actual ghost_hash needed for building the
+        matching OUT destination.
+
         Returns:
             Destination hash as bytes, or None if not found.
         """
-        # Build the destination hash from the ghost hash
-        # We need the seeder's identity to build the full destination,
-        # so we first request a path using the hash
+        # The ghost_hash may actually be a destination hash
+        # (the user copies the Destination from seeder output)
         try:
             dest_hash = bytes.fromhex(self.ghost_hash)
         except ValueError:
-            self._fail(f"Invalid ghost hash: {self.ghost_hash}")
+            self._fail(f"Invalid hash: {self.ghost_hash}")
             return None
 
         # Check if path is already known
@@ -244,6 +248,37 @@ class Leecher:
             f"Path found! {hops} hops to seeder",
             RNS.LOG_INFO
         )
+
+        # Recall the announce app_data to get the real ghost_hash
+        app_data = RNS.Identity.recall_app_data(dest_hash)
+        if app_data:
+            try:
+                metadata = umsgpack.unpackb(app_data)
+                real_ghost_hash = metadata.get("ghost_hash")
+                if real_ghost_hash:
+                    RNS.log(
+                        f"Recovered ghost_hash from announce: {real_ghost_hash}",
+                        RNS.LOG_INFO
+                    )
+                    # Store the destination hash and update ghost_hash
+                    # to the real one (used for building the OUT destination)
+                    self._destination_hash = dest_hash
+                    self.ghost_hash = real_ghost_hash
+                else:
+                    RNS.log(
+                        "Announce data missing ghost_hash, using input hash",
+                        RNS.LOG_WARNING
+                    )
+            except Exception as e:
+                RNS.log(
+                    f"Could not parse announce data: {e}",
+                    RNS.LOG_WARNING
+                )
+        else:
+            RNS.log(
+                "No announce data recalled — seeder may need to re-announce",
+                RNS.LOG_WARNING
+            )
 
         return dest_hash
 
