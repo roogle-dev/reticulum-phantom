@@ -304,14 +304,8 @@ class Leecher:
                         metadata = umsgpack.unpackb(app_data)
                         gh = metadata.get("ghost_hash", "")
                         if gh == self._target:
-                            # Skip failed seeders
-                            if destination_hash in failed_dests:
-                                RNS.log(
-                                    f"Skipping failed seeder: "
-                                    f"{RNS.prettyhexrep(destination_hash)}",
-                                    RNS.LOG_DEBUG
-                                )
-                                return
+                            # Announce = seeder is alive! Clear from blacklist
+                            failed_dests.discard(destination_hash)
                             RNS.log(
                                 f"Found seeder via announce: {RNS.prettyhexrep(destination_hash)}",
                                 RNS.LOG_INFO
