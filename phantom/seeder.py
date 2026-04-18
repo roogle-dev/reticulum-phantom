@@ -245,10 +245,7 @@ class Seeder:
         if announce_delay > 0:
             time.sleep(announce_delay)
 
-        self._announce_data = umsgpack.packb({
-            "ghost_hash": self.ghost.ghost_hash,
-        })
-        self._destination.announce(app_data=self._announce_data)
+        self._destination.announce(app_data=self._make_announce_data())
 
         # Register with the global want-announce handler
         # (works on platforms with rnsd, e.g. Ubuntu)
@@ -280,7 +277,7 @@ class Seeder:
                 if self._running and self._destination:
                     try:
                         self._destination.announce(
-                            app_data=self._announce_data
+                            app_data=self._make_announce_data()
                         )
                         RNS.log(
                             f"Re-announced: {self.ghost.name}",
@@ -322,6 +319,18 @@ class Seeder:
 
         RNS.log(f"Stopped seeding: {self.ghost.name}", RNS.LOG_INFO)
 
+    def _make_announce_data(self):
+        """Build announce app_data with a nonce to prevent deduplication.
+
+        RNS silently drops re-announces with identical app_data from
+        the same destination. Adding a timestamp ensures each announce
+        is unique and propagates to all peers.
+        """
+        return umsgpack.packb({
+            "ghost_hash": self.ghost.ghost_hash,
+            "t": int(time.time()),  # nonce — prevents dedup
+        })
+
     def _respond_to_want(self, leecher_dest_hash):
         """
         Respond to a leecher's 'want' announcement.
@@ -335,10 +344,7 @@ class Seeder:
 
         try:
             # Re-announce our destination so the leecher discovers us
-            announce_data = umsgpack.packb({
-                "ghost_hash": self.ghost.ghost_hash,
-            })
-            self._destination.announce(app_data=announce_data)
+            self._destination.announce(app_data=self._make_announce_data())
 
             RNS.log(
                 f"Responded to want for {self.ghost.name} — "
