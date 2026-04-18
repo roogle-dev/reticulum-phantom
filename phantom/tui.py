@@ -248,9 +248,9 @@ class PhantomTUI(App):
         Binding("r", "refresh", "Refresh"),
     ]
 
-    def __init__(self, rns_config=None, **kwargs):
+    def __init__(self, engine, **kwargs):
         super().__init__(**kwargs)
-        self.engine = PhantomEngine(rns_config)
+        self.engine = engine
         self._transfer_widgets = {}
         self._refresh_timer = None
 
@@ -314,9 +314,10 @@ class PhantomTUI(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Start the engine and set up refresh timer."""
-        # Start engine in background
-        self.run_worker(self._start_engine, thread=True)
+        """Set up refresh timer and log callbacks."""
+        # Hook engine callbacks
+        self.engine.on_log = self._on_engine_log
+        self.engine.on_transfer_update = self._on_transfer_update
 
         # Set up periodic refresh
         self._refresh_timer = self.set_interval(2.0, self._refresh_ui)
@@ -325,14 +326,8 @@ class PhantomTUI(App):
         self._init_ghost_table()
         self._init_settings_table()
 
-    async def _start_engine(self) -> None:
-        """Start the Phantom engine (runs in worker thread)."""
-        self.engine.on_log = self._on_engine_log
-        self.engine.on_transfer_update = self._on_transfer_update
-        self.engine.start()
-
-        # Initial UI update
-        self.call_from_thread(self._refresh_ui)
+        # Initial refresh
+        self._refresh_ui()
 
     def _on_engine_log(self, entry):
         """Handle log events from the engine."""
@@ -584,6 +579,22 @@ class PhantomTUI(App):
 
 
 def run_tui(rns_config=None):
-    """Launch the TUI."""
-    app = PhantomTUI(rns_config=rns_config)
+    """Launch the TUI. Starts RNS in main thread first."""
+    import sys
+    from rich.console import Console
+    console = Console()
+
+    console.print("\n[bold cyan]Starting Reticulum Phantom TUI...[/bold cyan]")
+    console.print("[dim]Initializing network stack...[/dim]")
+
+    # Start engine in main thread (RNS needs main thread for signals)
+    engine = PhantomEngine(rns_config)
+    engine.start()
+
+    console.print("[bold green]✓ Engine ready. Launching dashboard...[/bold green]\n")
+
+    app = PhantomTUI(engine=engine)
     app.run()
+
+    # Clean up
+    engine.stop()
