@@ -663,9 +663,9 @@ class Leecher:
                     if hint_dest not in found_dests:
                         found_dests.append(hint_dest)
                         RNS.log(
-                            f"Seeder responded: "
+                            f"Seeder path known: "
                             f"{RNS.prettyhexrep(hint_dest)} "
-                            f"({len(found_dests)} total)",
+                            f"({len(found_dests)} total) — verifying link...",
                             RNS.LOG_INFO
                         )
                 first_found.set()

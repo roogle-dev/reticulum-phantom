@@ -360,15 +360,22 @@ class Seeder:
         """
         Respond to a leecher's 'want' announcement.
 
-        Instead of connecting to the leecher (reverse link may fail
-        due to NAT/routing), we simply re-announce our own destination.
-        The leecher's announce handler will catch it and connect to us.
+        Strategy:
+        1. Request path to the leecher (triggers PATH_RESPONSE, not rate-limited)
+        2. Then re-announce our destination (may be rate-limited, but path
+           request ensures the leecher can discover our path regardless)
         """
         if not self._running or not self._destination:
             return
 
         try:
-            # Re-announce our destination so the leecher discovers us
+            # Step 1: Request path to leecher — this triggers a PATH_RESPONSE
+            # on the mesh, which is NOT subject to announce rate limiting.
+            # The leecher will see our path appear in the path table.
+            if not RNS.Transport.has_path(leecher_dest_hash):
+                RNS.Transport.request_path(leecher_dest_hash)
+
+            # Step 2: Re-announce (may be rate-limited by Hub, but worth trying)
             self._destination.announce(app_data=self._make_announce_data())
 
             RNS.log(
