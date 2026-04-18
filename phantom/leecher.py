@@ -317,7 +317,9 @@ class Leecher:
             RNS.LOG_INFO
         )
 
-        self.chunks_received = self.total_chunks - len(missing)
+        cached_count = self.total_chunks - len(missing)
+        if cached_count > self.chunks_received:
+            self.chunks_received = cached_count
 
         # Thread-safe chunk queue
         chunk_queue = queue.Queue()
