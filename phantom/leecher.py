@@ -152,9 +152,9 @@ class Leecher:
     def _download_worker(self):
         """Main download worker thread with multi-peer swarm support."""
         failed_dests = set()
-        max_retries = 10
+        attempt = 0
 
-        for attempt in range(max_retries):
+        while self._running:
             if not self._running:
                 return
 
@@ -251,11 +251,10 @@ class Leecher:
                 return
 
             except Exception as e:
-                RNS.log(f"Download attempt {attempt+1} error: {e}",
+                attempt += 1
+                RNS.log(f"Download attempt {attempt} error: {e}",
                         RNS.LOG_ERROR)
                 time.sleep(3)
-                if attempt >= max_retries - 1:
-                    self._fail(f"Download error after {max_retries} attempts: {e}")
 
     def _connect_to_seeders(self, dest_hashes, failed_dests):
         """
