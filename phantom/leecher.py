@@ -522,9 +522,15 @@ class Leecher:
         timeout = config.DEFAULT_TRANSFER_TIMEOUT
         if not link_established.wait(timeout):
             if link_failed.is_set():
-                self._fail("Link to seeder failed — connection was rejected or dropped")
+                RNS.log(
+                    "Link to seeder failed — connection rejected or dropped",
+                    RNS.LOG_WARNING
+                )
             else:
-                self._fail("Link establishment timed out — seeder may be unreachable")
+                RNS.log(
+                    "Link establishment timed out — seeder unreachable",
+                    RNS.LOG_WARNING
+                )
             return None
 
         RNS.log("Encrypted link established with seeder ✓", RNS.LOG_INFO)
