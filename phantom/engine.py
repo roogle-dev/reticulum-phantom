@@ -192,6 +192,16 @@ class PhantomEngine:
                     return None
                 ghost.save()
 
+        # Check if already seeding this ghost_hash
+        with self._lock:
+            for existing_tid, existing_t in self._transfers.items():
+                if (existing_t.ghost_hash == ghost.ghost_hash
+                        and existing_t.direction == "upload"
+                        and existing_t.state == "seeding"):
+                    self._add_log("info",
+                                  f"Already seeding: {ghost.name}")
+                    return existing_tid
+
         # Create transfer
         with self._lock:
             self._transfer_counter += 1
