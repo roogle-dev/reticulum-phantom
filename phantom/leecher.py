@@ -257,13 +257,23 @@ class Leecher:
         Returns:
             An RNS.Link instance, or None on failure.
         """
-        # Recall the seeder's identity
+        # Recall the seeder's identity from the path we discovered
         seeder_identity = RNS.Identity.recall(destination_hash)
+
         if not seeder_identity:
-            self._fail("Cannot recall seeder identity")
+            # Wait a moment and retry — announce may still be propagating
+            RNS.log("Waiting for seeder identity to propagate...", RNS.LOG_INFO)
+            time.sleep(3)
+            seeder_identity = RNS.Identity.recall(destination_hash)
+
+        if not seeder_identity:
+            self._fail("Cannot recall seeder identity — the seeder may need to re-announce")
             return None
 
-        # Build the destination
+        RNS.log(f"Recalled seeder identity: {RNS.prettyhexrep(seeder_identity.hash)}", RNS.LOG_DEBUG)
+
+        # Build the OUT destination matching the seeder's IN destination.
+        # This must use the EXACT same app_name and aspects as the seeder.
         seeder_destination = RNS.Destination(
             seeder_identity,
             RNS.Destination.OUT,
@@ -273,16 +283,32 @@ class Leecher:
             self.ghost_hash
         )
 
-        # Establish the link
+        # Verify the destination hash matches what we discovered
+        if seeder_destination.hash != destination_hash:
+            RNS.log(
+                f"Destination hash mismatch: "
+                f"expected {RNS.prettyhexrep(destination_hash)}, "
+                f"built {RNS.prettyhexrep(seeder_destination.hash)}",
+                RNS.LOG_WARNING
+            )
+
+        # Establish the encrypted link
         link_established = threading.Event()
         link_failed = threading.Event()
 
         def on_established(link):
+            RNS.log("Link established callback fired", RNS.LOG_DEBUG)
             link_established.set()
 
         def on_closed(link):
             if not link_established.is_set():
+                RNS.log("Link closed before establishment", RNS.LOG_WARNING)
                 link_failed.set()
+
+        RNS.log(
+            f"Initiating link to {RNS.prettyhexrep(seeder_destination.hash)}...",
+            RNS.LOG_INFO
+        )
 
         self._link = RNS.Link(
             seeder_destination,
@@ -294,12 +320,12 @@ class Leecher:
         timeout = config.DEFAULT_TRANSFER_TIMEOUT
         if not link_established.wait(timeout):
             if link_failed.is_set():
-                self._fail("Link to seeder failed")
+                self._fail("Link to seeder failed — connection was rejected or dropped")
             else:
-                self._fail("Link establishment timed out")
+                self._fail("Link establishment timed out — seeder may be unreachable")
             return None
 
-        RNS.log("Encrypted link established with seeder", RNS.LOG_INFO)
+        RNS.log("Encrypted link established with seeder ✓", RNS.LOG_INFO)
         return self._link
 
     def _fetch_manifest(self, link):
