@@ -322,6 +322,7 @@ class Seeder:
         """
         return umsgpack.packb({
             "ghost_hash": self.ghost.ghost_hash,
+            "type": "seeder",
             "t": int(time.time()),  # nonce — prevents dedup
         })
 

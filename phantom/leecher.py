@@ -393,6 +393,8 @@ class Leecher:
                             metadata = umsgpack.unpackb(app_data)
                             if not isinstance(metadata, dict):
                                 return
+                            if metadata.get("type") != "seeder":
+                                return
                             gh = metadata.get("ghost_hash", "")
                             if gh == self._target:
                                 if destination_hash not in active_peer_ids:
@@ -544,6 +546,9 @@ class Leecher:
                         # Only process dict payloads (Phantom announces)
                         if not isinstance(metadata, dict):
                             return
+                        # Only match SEEDER announces, not other leechers' wants
+                        if metadata.get("type") != "seeder":
+                            return
                         gh = metadata.get("ghost_hash", "")
                         if gh == self._target:
                             if destination_hash not in failed_dests:
@@ -588,6 +593,7 @@ class Leecher:
         # ── Announce "I want X" (for announce-based discovery) ────
         announce_data = umsgpack.packb({
             "ghost_hash": input_hash,
+            "type": "want",
             "t": int(time.time()),
         })
         want_dest.announce(app_data=announce_data)
