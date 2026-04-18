@@ -187,6 +187,23 @@ class Seeder:
                 pass
 
         self._active_links.clear()
+
+        # Deregister destination from RNS Transport so it can be re-registered
+        if self._destination:
+            try:
+                RNS.Transport.deregister_destination(self._destination)
+            except Exception:
+                # Fallback: manually remove from destinations list
+                try:
+                    with RNS.Transport.destinations_lock:
+                        RNS.Transport.destinations = [
+                            d for d in RNS.Transport.destinations
+                            if d.hash != self._destination.hash
+                        ]
+                except Exception:
+                    pass
+            self._destination = None
+
         RNS.log(f"Stopped seeding: {self.ghost.name}", RNS.LOG_INFO)
 
     def _announce_loop(self, interval):
