@@ -519,7 +519,7 @@ class Leecher:
         )
 
         # Wait for link establishment — check both events
-        timeout = config.DEFAULT_TRANSFER_TIMEOUT
+        timeout = config.DEFAULT_LINK_TIMEOUT
         start = time.time()
         while time.time() - start < timeout:
             if link_established.is_set():
