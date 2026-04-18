@@ -317,6 +317,13 @@ class PhantomEngine:
 
         self._add_log("info", f"Transfer stopped: {transfer.name}")
 
+    def remove_transfer(self, transfer_id):
+        """Remove a transfer from the list (stops it first if running)."""
+        self.stop_transfer(transfer_id)
+        with self._lock:
+            self._transfers.pop(transfer_id, None)
+        self._add_log("info", f"Transfer removed: {transfer_id}")
+
     def get_transfers(self):
         """Get list of all transfers for display."""
         with self._lock:

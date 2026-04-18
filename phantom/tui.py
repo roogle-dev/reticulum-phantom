@@ -88,7 +88,7 @@ class IdentityPanel(Static):
 
 
 class TransferRow(Static):
-    """A single transfer progress display — full width, no truncation."""
+    """A single transfer progress display with stop/remove controls."""
 
     def __init__(self, transfer, **kwargs):
         super().__init__(**kwargs)
@@ -143,22 +143,32 @@ class TransferRow(Static):
         # Destination hash
         dest_str = ""
         if t.destination_hash:
-            dest_str = f"\n   [dim]Dest: {t.destination_hash}[/dim]"
+            dest_str = "\n   [dim]Dest: " + t.destination_hash + "[/dim]"
 
         # Ghost hash
         ghost_str = ""
         if t.ghost_hash:
-            ghost_str = f"  [dim]Ghost: {t.ghost_hash[:16]}...[/dim]"
+            ghost_str = "  [dim]Ghost: " + t.ghost_hash[:16] + "...[/dim]"
 
-        # Full name — no truncation
+        # Full name
         name = t.name or "Unknown"
 
-        content = (
-            f" {arrow}  [bold]{name}[/bold]{ghost_str}\n"
-            f"   [cyan]{bar}[/cyan] {pct:5.1f}%  {size_str}  {chunks_str}  {state_str}"
-            f"{dest_str}"
-        )
+        # Action buttons based on state
+        if t.state in ("complete", "failed", "cancelled", "stopped"):
+            actions = "  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]"
+        else:
+            actions = "  [dim][[/dim][bold yellow]⏹ Stop[/bold yellow][dim]][/dim]  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]"
+
+        line1 = f" {arrow}  [bold]{name}[/bold]{ghost_str}{actions}"
+        line2 = f"   [cyan]{bar}[/cyan] {pct:5.1f}%  {size_str}  {chunks_str}  {state_str}"
+
+        content = line1 + "\n" + line2 + dest_str
         return Text.from_markup(content)
+
+    def on_click(self, event):
+        """Handle clicks on the transfer row."""
+        t = self._transfer
+        self.app.action_transfer_click(t.id, t.state)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -805,6 +815,21 @@ class PhantomTUI(App):
                 )
 
         event.input.value = ""
+
+    def action_transfer_click(self, transfer_id, state):
+        """Handle click on a transfer row — stop or remove."""
+        if state in ("complete", "failed", "cancelled", "stopped"):
+            # Remove from list
+            self.run_worker(
+                lambda: self.engine.remove_transfer(transfer_id),
+                thread=True,
+            )
+        else:
+            # Stop the transfer
+            self.run_worker(
+                lambda: self.engine.stop_transfer(transfer_id),
+                thread=True,
+            )
 
     def on_unmount(self) -> None:
         """Clean up on exit."""
