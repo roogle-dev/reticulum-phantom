@@ -206,81 +206,118 @@ class Leecher:
 
     def _discover_seeder(self):
         """
-        Find a path to a seeder on the mesh.
+        Find a seeder for the requested ghost_hash.
 
-        The user provides the destination hash (from seeder output).
-        We discover the path, then recall the announce app_data to
-        extract the actual ghost_hash needed for building the
-        matching OUT destination.
+        Uses two strategies:
+        1. Listen for announces with matching ghost_hash in app_data
+        2. If input looks like a destination hash, try direct path request
 
         Returns:
             Destination hash as bytes, or None if not found.
         """
-        # The ghost_hash may actually be a destination hash
-        # (the user copies the Destination from seeder output)
-        try:
-            dest_hash = bytes.fromhex(self.ghost_hash)
-        except ValueError:
-            self._fail(f"Invalid hash: {self.ghost_hash}")
-            return None
+        input_hash = self.ghost_hash
+        found_event = threading.Event()
+        found_dest = [None]  # [destination_hash_bytes]
 
-        # Check if path is already known
-        if not RNS.Transport.has_path(dest_hash):
-            RNS.log(
-                f"Searching mesh for ghost {self.ghost_hash[:16]}...",
-                RNS.LOG_INFO
-            )
-            RNS.Transport.request_path(dest_hash)
+        class GhostAnnounceHandler:
+            """RNS-compatible announce handler that filters by ghost_hash."""
+            def __init__(self, target_ghost_hash):
+                self.aspect_filter = config.RNS_APP_NAME + ".swarm"
+                self._target = target_ghost_hash
 
-            # Wait for path discovery
-            timeout = config.DEFAULT_PATH_TIMEOUT
-            start = time.time()
-            while not RNS.Transport.has_path(dest_hash):
-                if time.time() - start > timeout:
-                    self._fail("Seeder not found on mesh (timeout)")
-                    return None
-                if not self._running:
-                    return None
-                time.sleep(0.5)
+            def received_announce(self, destination_hash, announced_identity, app_data):
+                if app_data:
+                    try:
+                        metadata = umsgpack.unpackb(app_data)
+                        gh = metadata.get("ghost_hash", "")
+                        if gh == self._target:
+                            RNS.log(
+                                f"Found seeder via announce: {RNS.prettyhexrep(destination_hash)}",
+                                RNS.LOG_INFO
+                            )
+                            found_dest[0] = destination_hash
+                            found_event.set()
+                    except Exception:
+                        pass
 
-        hops = RNS.Transport.hops_to(dest_hash)
+        # Register announce handler
+        handler = GhostAnnounceHandler(input_hash)
+        RNS.Transport.register_announce_handler(handler)
+
         RNS.log(
-            f"Path found! {hops} hops to seeder",
+            f"Searching mesh for ghost {input_hash[:16]}...",
             RNS.LOG_INFO
         )
 
-        # Recall the announce app_data to get the real ghost_hash
-        app_data = RNS.Identity.recall_app_data(dest_hash)
-        if app_data:
-            try:
-                metadata = umsgpack.unpackb(app_data)
-                real_ghost_hash = metadata.get("ghost_hash")
-                if real_ghost_hash:
-                    RNS.log(
-                        f"Recovered ghost_hash from announce: {real_ghost_hash}",
-                        RNS.LOG_INFO
-                    )
-                    # Store the destination hash and update ghost_hash
-                    # to the real one (used for building the OUT destination)
-                    self._destination_hash = dest_hash
-                    self.ghost_hash = real_ghost_hash
-                else:
-                    RNS.log(
-                        "Announce data missing ghost_hash, using input hash",
-                        RNS.LOG_WARNING
-                    )
-            except Exception as e:
-                RNS.log(
-                    f"Could not parse announce data: {e}",
-                    RNS.LOG_WARNING
-                )
-        else:
-            RNS.log(
-                "No announce data recalled — seeder may need to re-announce",
-                RNS.LOG_WARNING
-            )
+        # Also try direct approach: if input is 32 hex chars it might
+        # be a destination hash from a previous session
+        dest_hash = None
+        try:
+            candidate = bytes.fromhex(input_hash)
+            if len(candidate) == 16:
+                # Looks like a destination hash — try direct path request
+                RNS.Transport.request_path(candidate)
 
-        return dest_hash
+                # Also check if we already have this path cached
+                # with announce data containing the ghost_hash
+                app_data = RNS.Identity.recall_app_data(candidate)
+                if app_data:
+                    try:
+                        metadata = umsgpack.unpackb(app_data)
+                        real_ghost = metadata.get("ghost_hash")
+                        if real_ghost:
+                            RNS.log(
+                                f"Recovered ghost_hash from cache: {real_ghost}",
+                                RNS.LOG_INFO
+                            )
+                            self.ghost_hash = real_ghost
+                            dest_hash = candidate
+                    except Exception:
+                        pass
+        except (ValueError, Exception):
+            pass
+
+        # Wait for discovery via announce OR direct path
+        timeout = config.DEFAULT_PATH_TIMEOUT * 2  # Give more time for announces
+        start = time.time()
+
+        while not found_event.is_set():
+            if dest_hash and RNS.Transport.has_path(dest_hash):
+                # Direct path found
+                hops = RNS.Transport.hops_to(dest_hash)
+                RNS.log(
+                    f"Path found via direct request! {hops} hops to seeder",
+                    RNS.LOG_INFO
+                )
+                return dest_hash
+
+            if time.time() - start > timeout:
+                break
+            if not self._running:
+                return None
+            time.sleep(0.5)
+
+        if found_event.is_set() and found_dest[0]:
+            dest_hash = found_dest[0]
+            # Request path to the announced destination
+            if not RNS.Transport.has_path(dest_hash):
+                RNS.Transport.request_path(dest_hash)
+                path_start = time.time()
+                while not RNS.Transport.has_path(dest_hash):
+                    if time.time() - path_start > config.DEFAULT_PATH_TIMEOUT:
+                        self._fail("Path request failed after announce")
+                        return None
+                    time.sleep(0.5)
+
+            hops = RNS.Transport.hops_to(dest_hash)
+            RNS.log(
+                f"Path found via announce! {hops} hops to seeder",
+                RNS.LOG_INFO
+            )
+            return dest_hash
+
+        self._fail("Seeder not found on mesh (timeout)")
+        return None
 
     def _connect_to_seeder(self, destination_hash):
         """
@@ -308,13 +345,14 @@ class Leecher:
         RNS.log(f"Recalled seeder identity: {RNS.prettyhexrep(seeder_identity.hash)}", RNS.LOG_DEBUG)
 
         # Build the OUT destination matching the seeder's IN destination.
-        # Uses fixed aspects (no ghost_hash) — both sides agree on the hash.
+        # ghost_hash is used as an aspect so each file has a unique destination.
         seeder_destination = RNS.Destination(
             seeder_identity,
             RNS.Destination.OUT,
             RNS.Destination.SINGLE,
             config.RNS_APP_NAME,
-            "swarm"
+            "swarm",
+            self.ghost_hash
         )
 
         # Verify the destination hash matches what we discovered

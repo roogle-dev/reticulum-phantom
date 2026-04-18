@@ -118,6 +118,23 @@ def main():
         default=None
     )
 
+    # ─── phantom seed-all ──────────────────────────────────────────────────
+    seedall_parser = subparsers.add_parser(
+        "seed-all",
+        help="Seed all files in a directory (or all known .ghost files)"
+    )
+    seedall_parser.add_argument(
+        "directory",
+        nargs="?",
+        help="Directory containing files to seed (default: scans ghosts dir)",
+        default=None
+    )
+    seedall_parser.add_argument(
+        "--rns-config",
+        help="Path to custom Reticulum config directory",
+        default=None
+    )
+
     # ─── phantom download ─────────────────────────────────────────────────
     download_parser = subparsers.add_parser(
         "download",
@@ -194,6 +211,8 @@ def main():
             cmd_identity(args)
         elif args.command == "seed":
             cmd_seed(args)
+        elif args.command == "seed-all":
+            cmd_seed_all(args)
         elif args.command == "download":
             cmd_download(args)
         elif args.command == "settings":
@@ -408,6 +427,135 @@ def cmd_seed(args):
         ui.console.print()
         seeder.stop()
         ui.print_info("Seeding stopped.")
+
+
+def cmd_seed_all(args):
+    """Handle: phantom seed-all [directory]"""
+    ui.print_banner()
+
+    # Collect files to seed
+    files_to_seed = []
+
+    if args.directory:
+        # Scan a directory for files
+        dirpath = os.path.abspath(args.directory)
+        if not os.path.isdir(dirpath):
+            ui.print_error(f"Directory not found: {dirpath}")
+            sys.exit(1)
+
+        ui.print_info(f"Scanning directory: {dirpath}")
+        for entry in os.listdir(dirpath):
+            full_path = os.path.join(dirpath, entry)
+            if os.path.isfile(full_path) and not entry.endswith(config.GHOST_EXTENSION):
+                files_to_seed.append(full_path)
+    else:
+        # Seed all known .ghost files from ghosts dir
+        config.ensure_directories()
+        ui.print_info(f"Scanning ghost library: {config.GHOSTS_DIR}")
+        for entry in os.listdir(config.GHOSTS_DIR):
+            if entry.endswith(config.GHOST_EXTENSION):
+                files_to_seed.append(os.path.join(config.GHOSTS_DIR, entry))
+
+    if not files_to_seed:
+        ui.print_warning("No files found to seed.")
+        sys.exit(0)
+
+    ui.print_info(f"Found {len(files_to_seed)} files to seed")
+
+    # Start the network
+    ui.print_info("Starting Reticulum Network Stack...")
+    network = PhantomNetwork(args.rns_config)
+    network.start()
+
+    # Load identity
+    pid = PhantomIdentity()
+    pid.load()
+
+    # Create seeders for all files
+    seeders = []
+
+    for fpath in files_to_seed:
+        try:
+            if fpath.endswith(config.GHOST_EXTENSION):
+                ghost = GhostFile.load(fpath)
+                if not ghost:
+                    ui.print_warning(f"Skipping invalid ghost: {os.path.basename(fpath)}")
+                    continue
+                # Find source file
+                source_dir = os.path.dirname(fpath)
+                source_path = os.path.join(source_dir, ghost.name)
+                if not os.path.isfile(source_path):
+                    base_path = fpath[:-len(config.GHOST_EXTENSION)]
+                    if os.path.isfile(base_path):
+                        source_path = base_path
+                    else:
+                        ui.print_warning(
+                            f"Source file not found for: {ghost.name}"
+                        )
+                        continue
+            else:
+                source_path = fpath
+                ghost_path = fpath + config.GHOST_EXTENSION
+
+                ghost = None
+                if os.path.isfile(ghost_path):
+                    ghost = GhostFile.load(ghost_path)
+
+                if ghost is None:
+                    ui.print_info(f"Hashing: {os.path.basename(fpath)}...")
+                    ghost = GhostFile.create(fpath)
+                    if not ghost:
+                        ui.print_warning(
+                            f"Failed to create ghost: {os.path.basename(fpath)}"
+                        )
+                        continue
+                    ghost.save()
+
+            seeder = Seeder(ghost, source_path, network, pid)
+            seeder.start()
+            seeders.append(seeder)
+
+            ui.console.print(
+                f"  [green]↑[/green] {ghost.name} "
+                f"[dim]| ghost:{ghost.ghost_hash[:16]}... "
+                f"| dest:{seeder.destination_hash_hex or '?'}[/dim]"
+            )
+
+        except Exception as e:
+            ui.print_warning(f"Error seeding {os.path.basename(fpath)}: {e}")
+
+    if not seeders:
+        ui.print_error("No files could be seeded.")
+        sys.exit(1)
+
+    ui.console.print()
+    ui.console.print(
+        f"[bold green]✓ Seeding {len(seeders)} files[/bold green]  "
+        f"[dim]Press Ctrl+C to stop all[/dim]"
+    )
+    ui.console.print()
+
+    # Keep running — show combined stats
+    try:
+        while True:
+            time.sleep(5)
+            total_peers = sum(s.get_stats()["active_peers"] for s in seeders)
+            total_chunks = sum(s.get_stats()["chunks_served"] for s in seeders)
+            total_uploaded = sum(s.get_stats()["total_uploaded"] for s in seeders)
+            uploaded_str = GhostFile._human_size(total_uploaded)
+
+            ui.console.print(
+                f"  [green]↑[/green] Files: {len(seeders)} | "
+                f"Peers: {total_peers} | "
+                f"Chunks served: {total_chunks} | "
+                f"Uploaded: {uploaded_str}",
+                end="\r"
+            )
+    except KeyboardInterrupt:
+        ui.console.print()
+        for s in seeders:
+            s.stop()
+        ui.print_info(f"Stopped {len(seeders)} seeders.")
 
 
 def cmd_download(args):
