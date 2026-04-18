@@ -274,8 +274,14 @@ class Leecher:
             try:
                 candidate = bytes.fromhex(input_hash)
                 if len(candidate) == 16:
+                    RNS.log(
+                        f"Input looks like destination hash, requesting path...",
+                        RNS.LOG_INFO
+                    )
                     RNS.Transport.request_path(candidate)
+                    dest_hash = candidate  # Always track this hash
 
+                    # Try to recover ghost_hash from cached app_data
                     app_data = RNS.Identity.recall_app_data(candidate)
                     if app_data:
                         try:
@@ -287,7 +293,6 @@ class Leecher:
                                     RNS.LOG_INFO
                                 )
                                 self.ghost_hash = real_ghost
-                                dest_hash = candidate
                         except Exception:
                             pass
             except (ValueError, Exception):
