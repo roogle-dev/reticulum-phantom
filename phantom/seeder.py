@@ -87,27 +87,43 @@ class WantAnnounceHandler:
             if not isinstance(metadata, dict):
                 return
 
-            # Only respond to "want" announces, not other seeders
-            if metadata.get("type") != "want":
+            announce_type = metadata.get("type", "")
+            ghost_hash = metadata.get("ghost_hash", "")
+
+            # Handle "want" announces — respond to leechers
+            if announce_type == "want":
+                with self._lock:
+                    seeder = self._seeders.get(ghost_hash)
+                if seeder:
+                    RNS.log(
+                        f"Leecher wants {ghost_hash[:16]}... — "
+                        f"we have it! Responding...",
+                        RNS.LOG_INFO
+                    )
+                    threading.Thread(
+                        target=seeder._respond_to_want,
+                        args=(destination_hash,),
+                        daemon=True
+                    ).start()
                 return
 
-            wanted_hash = metadata.get("ghost_hash", "")
-
-            with self._lock:
-                seeder = self._seeders.get(wanted_hash)
-
-            if seeder:
-                RNS.log(
-                    f"Leecher wants {wanted_hash[:16]}... — "
-                    f"we have it! Responding...",
-                    RNS.LOG_INFO
-                )
-                # Respond in a thread to avoid blocking the handler
-                threading.Thread(
-                    target=seeder._respond_to_want,
-                    args=(destination_hash,),
-                    daemon=True
-                ).start()
+            # Handle "seeder" announces — discover peer seeders
+            if announce_type == "seeder" and ghost_hash:
+                with self._lock:
+                    seeder = self._seeders.get(ghost_hash)
+                if seeder:
+                    new_dest = destination_hash.hex()
+                    own_dest = seeder._destination.hash.hex() if seeder._destination else ""
+                    # Don't add ourselves
+                    if new_dest != own_dest and new_dest not in seeder.ghost.seeder_dests:
+                        seeder.ghost.seeder_dests.append(new_dest)
+                        seeder.ghost.save()
+                        RNS.log(
+                            f"Discovered peer seeder for {ghost_hash[:16]}... "
+                            f"→ {new_dest[:16]}... "
+                            f"(now {len(seeder.ghost.seeder_dests)} known)",
+                            RNS.LOG_INFO
+                        )
         except Exception as e:
             RNS.log(
                 f"Error processing want announce: {e}",
