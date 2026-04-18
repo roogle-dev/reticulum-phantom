@@ -496,6 +496,19 @@ def cmd_seed(args):
         ui.console.print()
         seeder.stop()
         ui.print_info("Seeding stopped.")
+    except Exception as e:
+        ui.print_warning(f"Network error: {e} — seeder still running...")
+        try:
+            while True:
+                time.sleep(10)
+                try:
+                    ui.print_seeding_status(seeder.get_stats())
+                except Exception:
+                    pass
+        except KeyboardInterrupt:
+            ui.console.print()
+            seeder.stop()
+            ui.print_info("Seeding stopped.")
 
 
 def cmd_seed_all(args):
@@ -667,6 +680,31 @@ def cmd_seed_all(args):
         for s in seeders:
             s.stop()
         ui.print_info(f"Stopped {len(seeders)} seeders.")
+    except Exception as e:
+        # Top-level crash guard — RNS thread exceptions (WinError 10038, etc.)
+        ui.print_warning(
+            f"Network error: {e} — seeders still running, restarting monitor..."
+        )
+        # Don't exit — restart the stats loop
+        try:
+            while True:
+                time.sleep(10)
+                try:
+                    total_chunks = sum(s.get_stats()["chunks_served"] for s in seeders)
+                    total_uploaded = sum(s.get_stats()["total_uploaded"] for s in seeders)
+                    ui.console.print(
+                        f"  [green]↑[/green] Files: {len(seeders)} | "
+                        f"Chunks served: {total_chunks} | "
+                        f"Uploaded: {GhostFile._human_size(total_uploaded)}",
+                        end="\r"
+                    )
+                except Exception:
+                    pass
+        except KeyboardInterrupt:
+            ui.console.print()
+            for s in seeders:
+                s.stop()
+            ui.print_info(f"Stopped {len(seeders)} seeders.")
 
 
 def cmd_download(args):
