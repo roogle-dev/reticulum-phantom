@@ -254,33 +254,44 @@ class Leecher:
             RNS.LOG_INFO
         )
 
-        # Also try direct approach: if input is 32 hex chars it might
-        # be a destination hash from a previous session
+        # Strategy 1: Use seeder_dest from ghost file (fastest)
         dest_hash = None
-        try:
-            candidate = bytes.fromhex(input_hash)
-            if len(candidate) == 16:
-                # Looks like a destination hash — try direct path request
-                RNS.Transport.request_path(candidate)
+        if self.ghost and self.ghost.seeder_dest:
+            try:
+                candidate = bytes.fromhex(self.ghost.seeder_dest)
+                if len(candidate) == 16:
+                    RNS.log(
+                        f"Using seeder dest from ghost file: {self.ghost.seeder_dest}",
+                        RNS.LOG_INFO
+                    )
+                    RNS.Transport.request_path(candidate)
+                    dest_hash = candidate
+            except (ValueError, Exception):
+                pass
 
-                # Also check if we already have this path cached
-                # with announce data containing the ghost_hash
-                app_data = RNS.Identity.recall_app_data(candidate)
-                if app_data:
-                    try:
-                        metadata = umsgpack.unpackb(app_data)
-                        real_ghost = metadata.get("ghost_hash")
-                        if real_ghost:
-                            RNS.log(
-                                f"Recovered ghost_hash from cache: {real_ghost}",
-                                RNS.LOG_INFO
-                            )
-                            self.ghost_hash = real_ghost
-                            dest_hash = candidate
-                    except Exception:
-                        pass
-        except (ValueError, Exception):
-            pass
+        # Strategy 2: If input_hash looks like a destination hash, try direct
+        if not dest_hash:
+            try:
+                candidate = bytes.fromhex(input_hash)
+                if len(candidate) == 16:
+                    RNS.Transport.request_path(candidate)
+
+                    app_data = RNS.Identity.recall_app_data(candidate)
+                    if app_data:
+                        try:
+                            metadata = umsgpack.unpackb(app_data)
+                            real_ghost = metadata.get("ghost_hash")
+                            if real_ghost:
+                                RNS.log(
+                                    f"Recovered ghost_hash from cache: {real_ghost}",
+                                    RNS.LOG_INFO
+                                )
+                                self.ghost_hash = real_ghost
+                                dest_hash = candidate
+                        except Exception:
+                            pass
+            except (ValueError, Exception):
+                pass
 
         # Wait for discovery — patient retry loop
         # Mesh routes can take minutes to propagate through relay hubs.

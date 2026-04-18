@@ -44,6 +44,7 @@ class GhostFile:
         self.created_by = ""
         self.comment = ""
         self.source_path = ""     # Original file path for seeding
+        self.seeder_dest = ""    # Seeder's destination hash (for fast discovery)
 
     @property
     def ghost_hash(self):
@@ -165,6 +166,7 @@ class GhostFile:
             "created_by": self.created_by,
             "comment": self.comment,
             "source_path": self.source_path,
+            "seeder_dest": self.seeder_dest,
             "app_name": config.RNS_APP_NAME,
         }
 
@@ -213,6 +215,7 @@ class GhostFile:
             ghost.created_by = data.get("created_by", "")
             ghost.comment = data.get("comment", "")
             ghost.source_path = data.get("source_path", "")
+            ghost.seeder_dest = data.get("seeder_dest", "")
 
             # Validate
             if not ghost.file_hash:
