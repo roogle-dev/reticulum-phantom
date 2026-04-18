@@ -23,8 +23,10 @@ import os
 import sys
 import time
 import argparse
+import threading
 
 import RNS
+import RNS.vendor.umsgpack as umsgpack
 
 from phantom import config
 from phantom.identity import PhantomIdentity
