@@ -72,6 +72,7 @@ class PhantomEngine:
 
         # Known peers on the mesh
         self._peers = {}  # identity_hex → {name, dest, last_seen, files[]}
+        self._mesh_nodes = {}  # dest_hex → {identity, app_data, last_seen, hops}
 
         # Callbacks for TUI
         self.on_log = None           # Called with (timestamp, level, message)
@@ -351,9 +352,14 @@ class PhantomEngine:
             return list(self._log)
 
     def get_peers(self):
-        """Get list of known peers on the mesh."""
+        """Get list of known Phantom peers on the mesh."""
         with self._lock:
             return list(self._peers.values())
+
+    def get_mesh_nodes(self):
+        """Get list of ALL known nodes on the mesh (any app)."""
+        with self._lock:
+            return list(self._mesh_nodes.values())
 
     def get_network_stats(self):
         """Get network stats for display."""
@@ -384,9 +390,10 @@ class PhantomEngine:
     # ─── Internal ──────────────────────────────────────────────────────────
 
     def _register_peer_handler(self):
-        """Register an announce handler to track Phantom peers on the mesh."""
+        """Register announce handlers to track peers on the mesh."""
         engine = self
 
+        # Handler 1: Phantom peers (files they're seeding)
         class PeerAnnounceHandler:
             def __init__(self):
                 self.aspect_filter = config.RNS_APP_NAME + ".swarm"
@@ -430,8 +437,50 @@ class PhantomEngine:
                     except Exception:
                         pass
 
+        # Handler 2: ALL mesh nodes (any app, any announce)
+        class GlobalAnnounceHandler:
+            def __init__(self):
+                self.aspect_filter = None  # Catch ALL announces
+
+            def received_announce(self, destination_hash, announced_identity, app_data):
+                try:
+                    identity_hex = announced_identity.hash.hex()
+                    dest_hex = destination_hash.hex()
+
+                    # Try to determine the app/aspect from the destination
+                    app_data_str = ""
+                    if app_data:
+                        try:
+                            decoded = umsgpack.unpackb(app_data)
+                            if isinstance(decoded, dict):
+                                app_data_str = str(decoded.get("name", ""))[:40]
+                            elif isinstance(decoded, bytes):
+                                app_data_str = decoded.decode("utf-8", errors="replace")[:40]
+                            else:
+                                app_data_str = str(decoded)[:40]
+                        except Exception:
+                            app_data_str = f"{len(app_data)} bytes"
+
+                    with engine._lock:
+                        engine._mesh_nodes[dest_hex] = {
+                            "dest_hash": dest_hex,
+                            "dest_short": dest_hex[:16] + "...",
+                            "identity": identity_hex,
+                            "identity_short": identity_hex[:16] + "...",
+                            "app_data": app_data_str,
+                            "last_seen": time.time(),
+                            "hops": RNS.Transport.hops_to(destination_hash),
+                        }
+
+                except Exception:
+                    pass
+
         handler = PeerAnnounceHandler()
         RNS.Transport.register_announce_handler(handler)
+
+        global_handler = GlobalAnnounceHandler()
+        RNS.Transport.register_announce_handler(global_handler)
+
         self._add_log("info", "Listening for peers on mesh...")
 
     def _poll_seeder(self, transfer_id):

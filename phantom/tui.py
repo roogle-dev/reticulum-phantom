@@ -245,6 +245,11 @@ class PhantomTUI(App):
         margin: 1;
     }
 
+    #network-table {
+        height: 1fr;
+        margin: 1;
+    }
+
     #settings-container {
         height: 1fr;
         margin: 1;
@@ -328,10 +333,18 @@ class PhantomTUI(App):
             # ─── Peers Tab ────────────────────────────────────────
             with TabPane("Peers", id="tab-peers"):
                 yield Static(
-                    " [bold]🌐 Mesh Peers[/bold]  "
-                    "[dim]Phantom nodes discovered on the network[/dim]"
+                    " [bold]🌐 Phantom Peers[/bold]  "
+                    "[dim]Phantom nodes seeding files[/dim]"
                 )
                 yield DataTable(id="peers-table", zebra_stripes=True)
+
+            # ─── Network Tab ────────────────────────────────────────
+            with TabPane("Network", id="tab-network"):
+                yield Static(
+                    " [bold]📡 Mesh Network[/bold]  "
+                    "[dim]ALL nodes visible on the Reticulum mesh[/dim]"
+                )
+                yield DataTable(id="network-table", zebra_stripes=True)
 
             # ─── Settings Tab ────────────────────────────────────────
             with TabPane("Settings", id="tab-settings"):
@@ -354,6 +367,7 @@ class PhantomTUI(App):
         # Initialize tables
         self._init_ghost_table()
         self._init_peers_table()
+        self._init_network_table()
         self._init_settings_table()
 
         # Initial refresh
@@ -402,6 +416,7 @@ class PhantomTUI(App):
             self._refresh_identity()
             self._refresh_transfers()
             self._refresh_peers_table()
+            self._refresh_network_table()
         except Exception:
             pass
 
@@ -564,6 +579,41 @@ class PhantomTUI(App):
                     names_str,
                     last_seen,
                 )
+        except Exception:
+            pass
+
+    def _init_network_table(self):
+        """Initialize the network table showing ALL mesh nodes."""
+        try:
+            table = self.query_one("#network-table", DataTable)
+            table.add_columns(
+                "Destination", "Identity", "Hops", "App Data", "Last Seen"
+            )
+        except Exception:
+            pass
+
+    def _refresh_network_table(self):
+        """Refresh network table with all mesh nodes."""
+        try:
+            table = self.query_one("#network-table", DataTable)
+            table.clear()
+
+            nodes = self.engine.get_mesh_nodes()
+            for node in sorted(nodes, key=lambda n: n.get("last_seen", 0), reverse=True):
+                dest = node.get("dest_short", "Unknown")
+                identity = node.get("identity_short", "Unknown")
+                hops = str(node.get("hops", "?"))
+                app_data = node.get("app_data", "")
+
+                from datetime import datetime
+                try:
+                    last_seen = datetime.fromtimestamp(
+                        node["last_seen"]
+                    ).strftime("%H:%M:%S")
+                except Exception:
+                    last_seen = "Unknown"
+
+                table.add_row(dest, identity, hops, app_data, last_seen)
         except Exception:
             pass
 
