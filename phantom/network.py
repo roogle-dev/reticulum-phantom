@@ -60,6 +60,9 @@ class PhantomNetwork:
         try:
             RNS.log("Starting Reticulum Network Stack...", RNS.LOG_INFO)
 
+            # Ensure Sideband Hub is configured for mesh connectivity
+            self._ensure_sideband_hub()
+
             self._reticulum = RNS.Reticulum(self._configpath)
             self._started = True
 
@@ -123,3 +126,58 @@ class PhantomNetwork:
             "status": "running",
             "transport_enabled": RNS.Reticulum.transport_enabled(),
         }
+
+    def _ensure_sideband_hub(self):
+        """
+        Ensure the Sideband Hub interface is in the Reticulum config.
+        This gives new users instant global mesh connectivity.
+        """
+        try:
+            # Find the config file
+            if self._configpath:
+                config_dir = self._configpath
+            else:
+                config_dir = os.path.join(
+                    os.path.expanduser("~"), ".reticulum"
+                )
+
+            config_file = os.path.join(config_dir, "config")
+
+            # If no config exists yet, RNS will create one — we'll add to it
+            # after first run. For now, check if config exists.
+            if not os.path.isfile(config_file):
+                return  # RNS will create default config on first run
+
+            with open(config_file, "r") as f:
+                content = f.read()
+
+            # Check if Sideband Hub already configured
+            if "sideband.connect.reticulum.network" in content.lower():
+                return  # Already configured
+
+            if "sideband hub" in content.lower():
+                return  # Already has a sideband section
+
+            # Append Sideband Hub interface
+            sideband_config = """
+  # Phantom Mesh — Global connectivity via Sideband Hub
+  [[Sideband Hub]]
+    type = TCPClientInterface
+    enabled = Yes
+    target_host = sideband.connect.reticulum.network
+    target_port = 7822
+"""
+            with open(config_file, "a") as f:
+                f.write(sideband_config)
+
+            RNS.log(
+                "Added Sideband Hub to Reticulum config for mesh connectivity",
+                RNS.LOG_INFO
+            )
+
+        except Exception as e:
+            # Non-fatal — user can still configure manually
+            RNS.log(
+                f"Could not auto-configure Sideband Hub: {e}",
+                RNS.LOG_DEBUG
+            )
