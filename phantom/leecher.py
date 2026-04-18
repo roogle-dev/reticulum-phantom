@@ -501,15 +501,53 @@ class Leecher:
             except Exception:
                 live_want_dest = None
 
-            # Periodically re-announce want during download
-            announce_data = umsgpack.packb({"ghost_hash": self.ghost_hash})
+            # Periodically re-announce want + probe known dests during download
+            announce_data = umsgpack.packb({
+                "ghost_hash": self.ghost_hash,
+                "type": "want",
+                "t": int(time.time()),
+            })
             while not all_done.is_set() and self._running:
                 try:
                     if live_want_dest:
                         live_want_dest.announce(app_data=announce_data)
                 except Exception:
                     pass
-                # Wait before next re-announce
+
+                # Also try known dests from ghost file that we haven't connected to
+                if self.ghost and self.ghost.seeder_dests:
+                    for dest_hex in list(self.ghost.seeder_dests):
+                        if all_done.is_set():
+                            break
+                        try:
+                            dest_bytes = bytes.fromhex(dest_hex)
+                            if dest_bytes in active_peer_ids:
+                                continue  # Already connected
+                            # Try to find path to this seeder
+                            path_found = RNS.Transport.await_path(
+                                dest_bytes, timeout=3
+                            )
+                            if path_found:
+                                new_link = self._connect_to_seeder(dest_bytes)
+                                if new_link:
+                                    active_peer_ids.add(dest_bytes)
+                                    peer_id = len(workers)
+                                    t = threading.Thread(
+                                        target=peer_worker,
+                                        args=(dest_bytes, new_link, peer_id),
+                                        daemon=True
+                                    )
+                                    workers.append(t)
+                                    t.start()
+                                    RNS.log(
+                                        f"New peer from manifest joined! "
+                                        f"Now {len(active_peer_ids)} peer(s)",
+                                        RNS.LOG_INFO
+                                    )
+                        except Exception:
+                            pass
+
+                # Wait before next cycle
                 for _ in range(config.WANT_ANNOUNCE_INTERVAL):
                     if all_done.is_set() or not self._running:
                         break
