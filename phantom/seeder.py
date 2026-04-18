@@ -124,6 +124,18 @@ class WantAnnounceHandler:
                             f"(now {len(seeder.ghost.seeder_dests)} known)",
                             RNS.LOG_INFO
                         )
+                        # Re-announce so the new peer discovers us back
+                        if seeder._destination and seeder._running:
+                            try:
+                                seeder._destination.announce(
+                                    app_data=seeder._make_announce_data()
+                                )
+                                RNS.log(
+                                    f"Re-announced to notify peer {new_dest[:16]}...",
+                                    RNS.LOG_DEBUG
+                                )
+                            except Exception:
+                                pass
         except Exception as e:
             RNS.log(
                 f"Error processing want announce: {e}",
