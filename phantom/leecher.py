@@ -151,25 +151,16 @@ class Leecher:
 
     def _download_worker(self):
         """Main download worker thread with multi-peer swarm support."""
-        failed_dests = set()
         attempt = 0
 
         while self._running:
             if not self._running:
                 return
 
-            # Clear failed dests on retry — seeders may have come back
-            if attempt > 0:
-                RNS.log(
-                    f"Retry attempt {attempt}: clearing {len(failed_dests)} "
-                    f"failed dest(s) — seeders may have returned",
-                    RNS.LOG_INFO
-                )
-                failed_dests.clear()
-
             try:
-                # Step 1: Discover ALL seeders
+                # Step 1: Discover ALL seeders — no blacklisting, always try all
                 self._set_state(self.STATE_DISCOVERING)
+                failed_dests = set()  # Fresh each cycle — never blacklist
                 seeder_dests = self._discover_seeders(
                     failed_dests=failed_dests
                 )
