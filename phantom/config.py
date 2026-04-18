@@ -27,7 +27,8 @@ DEFAULT_CHUNK_SIZE = 1_048_576    # 1 MB
 MIN_CHUNK_SIZE = 65_536           # 64 KB
 MAX_CHUNK_SIZE = 16_777_216       # 16 MB
 
-DEFAULT_ANNOUNCE_INTERVAL = 60    # seconds (frequent for fast discovery)
+DEFAULT_ANNOUNCE_INTERVAL = 1800  # seconds (30 min — mesh-friendly, avoids announce spam)
+ANNOUNCE_STAGGER_PER_FILE = 2     # seconds between each file's initial announce in seed-all
 DEFAULT_TRANSFER_TIMEOUT = 120    # seconds (for data transfers)
 DEFAULT_LINK_TIMEOUT = 10         # seconds (for link establishment — fast failover)
 DEFAULT_PATH_TIMEOUT = 30         # seconds

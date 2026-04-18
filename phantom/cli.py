@@ -561,7 +561,8 @@ def cmd_seed_all(args):
                     ghost.save()
 
             seeder = Seeder(ghost, source_path, network, pid)
-            seeder.start()
+            stagger = len(seeders) * config.ANNOUNCE_STAGGER_PER_FILE
+            seeder.start(announce_delay=stagger)
             seeders.append(seeder)
 
             ui.console.print(

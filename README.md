@@ -269,10 +269,11 @@ The **ghost hash** (first 16 bytes of the file's SHA-256) is the unique identifi
 
 Phantom uses **announce-first discovery**:
 
-1. **Seeders announce** — Every 60 seconds, seeders broadcast "I have ghost_hash X" on the mesh
+1. **Seeders announce** — On startup and every 30 minutes, seeders broadcast "I have ghost_hash X" on the mesh
 2. **Leecher discovers** — Collects ALL seeders during a 5-second discovery window
 3. **Continuous discovery** — New seeders joining during download are automatically added to the swarm
 4. **Auto-failover** — If a seeder dies, its chunks redistribute to remaining peers
+5. **Staggered announces** — When seeding multiple files, announces are spaced 2 seconds apart to avoid flooding the mesh
 
 No hardcoded addresses. No single points of failure. Pure mesh discovery.
 
@@ -324,7 +325,7 @@ python phantom.py settings tcp_port 8888
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `chunk_size` | 1048576 (1MB) | File chunk size in bytes |
-| `announce_interval` | 60 (1min) | Re-announce interval in seconds |
+| `announce_interval` | 1800 (30min) | Re-announce interval in seconds |
 | `transfer_timeout` | 120 (2min) | Transfer timeout in seconds |
 | `auto_seed_after_download` | true | Auto-seed after downloading |
 | `tcp_enabled` | true | Enable TCP/IP transport |

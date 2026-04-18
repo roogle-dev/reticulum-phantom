@@ -137,12 +137,14 @@ class PhantomEngine:
 
         self._add_log("info", "Engine stopped")
 
-    def seed_file(self, file_path):
+    def seed_file(self, file_path, announce_delay=0):
         """
         Start seeding a file.
 
         Args:
             file_path: Path to the file (or .ghost file).
+            announce_delay: Seconds to wait before first announce.
+                            Used by seed-all to stagger announces.
 
         Returns:
             Transfer ID string, or None on error.
@@ -202,7 +204,7 @@ class PhantomEngine:
 
         # Create and start seeder
         seeder = Seeder(ghost, source_path, self._network, self._identity)
-        seeder.start()
+        seeder.start(announce_delay=announce_delay)
         transfer._seeder = seeder
         transfer.destination_hash = seeder.destination_hash_hex or ""
 

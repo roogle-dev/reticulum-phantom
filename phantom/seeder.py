@@ -15,6 +15,7 @@ Flow:
 
 import os
 import time
+import random
 import threading
 
 import RNS
@@ -76,12 +77,17 @@ class Seeder:
             return RNS.hexrep(self._destination.hash, delimit=False)
         return None
 
-    def start(self):
+    def start(self, announce_delay=0):
         """
         Start seeding the file.
 
         Creates the RNS destination, registers handlers,
         and announces on the mesh.
+
+        Args:
+            announce_delay: Seconds to wait before first announce.
+                            Used by seed-all to stagger announces
+                            and avoid flooding the mesh.
         """
         if self._running:
             RNS.log("Seeder already running", RNS.LOG_WARNING)
@@ -126,6 +132,11 @@ class Seeder:
         announce_data = umsgpack.packb({
             "ghost_hash": self.ghost.ghost_hash,
         })
+
+        # Stagger initial announce in seed-all mode to avoid mesh flooding
+        if announce_delay > 0:
+            time.sleep(announce_delay)
+
         self._destination.announce(app_data=announce_data)
 
         self._running = True
@@ -179,9 +190,11 @@ class Seeder:
         RNS.log(f"Stopped seeding: {self.ghost.name}", RNS.LOG_INFO)
 
     def _announce_loop(self, interval):
-        """Periodically re-announce on the mesh."""
+        """Periodically re-announce on the mesh with jitter to avoid bursts."""
         while self._running:
-            time.sleep(interval)
+            # Add ±10% jitter so multiple seeders don't re-announce simultaneously
+            jitter = interval * random.uniform(-0.1, 0.1)
+            time.sleep(interval + jitter)
             if self._running and self._destination:
                 try:
                     announce_data = umsgpack.packb({
