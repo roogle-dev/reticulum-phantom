@@ -379,7 +379,60 @@ class Leecher:
 
         def discovery_watcher():
             """Background thread: re-announce wants to attract new seeders."""
-            # Create a want-destination for mid-download discovery
+
+            # Announce handler to catch new seeder responses during download
+            class LiveSeederHandler:
+                def __init__(self, target_hash):
+                    self.aspect_filter = None
+                    self._target = target_hash
+
+                def received_announce(self, destination_hash, announced_identity, app_data):
+                    if all_done.is_set():
+                        return
+                    if app_data:
+                        try:
+                            metadata = umsgpack.unpackb(app_data)
+                            gh = metadata.get("ghost_hash", "")
+                            if gh == self._target:
+                                if destination_hash not in active_peer_ids:
+                                    RNS.log(
+                                        f"New seeder discovered during download: "
+                                        f"{RNS.prettyhexrep(destination_hash)}",
+                                        RNS.LOG_INFO
+                                    )
+                                    # Request path then connect
+                                    if not RNS.Transport.has_path(destination_hash):
+                                        RNS.Transport.request_path(destination_hash)
+                                    deadline = time.time() + 10
+                                    while not RNS.Transport.has_path(destination_hash):
+                                        if time.time() > deadline or all_done.is_set():
+                                            return
+                                        time.sleep(0.5)
+
+                                    new_link = self._outer._connect_to_seeder(destination_hash)
+                                    if new_link:
+                                        active_peer_ids.add(destination_hash)
+                                        peer_id = len(workers)
+                                        t = threading.Thread(
+                                            target=peer_worker,
+                                            args=(destination_hash, new_link, peer_id),
+                                            daemon=True
+                                        )
+                                        workers.append(t)
+                                        t.start()
+                                        RNS.log(
+                                            f"New peer joined swarm! "
+                                            f"Now {len(active_peer_ids)} peer(s)",
+                                            RNS.LOG_INFO
+                                        )
+                        except Exception:
+                            pass
+
+            live_handler = LiveSeederHandler(self.ghost_hash)
+            live_handler._outer = self
+            RNS.Transport.register_announce_handler(live_handler)
+
+            # Create want-destination for re-announces
             try:
                 live_want_dest = RNS.Destination(
                     self.identity.identity,
@@ -390,62 +443,14 @@ class Leecher:
                     self.ghost_hash
                 )
             except Exception:
-                # Destination may still be registered from initial discovery
-                return
-
-            def _on_live_link(link):
-                link.set_packet_callback(
-                    lambda data, pkt: _handle_live_response(data, link)
-                )
-
-            def _handle_live_response(data, link):
-                if all_done.is_set():
-                    return
-                try:
-                    metadata = umsgpack.unpackb(data)
-                    seeder_dest = metadata.get("seeder_dest")
-                    if seeder_dest and len(seeder_dest) == 16:
-                        if seeder_dest not in active_peer_ids:
-                            RNS.log(
-                                f"New seeder discovered during download: "
-                                f"{seeder_dest.hex()[:16]}...",
-                                RNS.LOG_INFO
-                            )
-                            # Request path then connect
-                            if not RNS.Transport.has_path(seeder_dest):
-                                RNS.Transport.request_path(seeder_dest)
-                            deadline = time.time() + 10
-                            while not RNS.Transport.has_path(seeder_dest):
-                                if time.time() > deadline or all_done.is_set():
-                                    return
-                                time.sleep(0.5)
-
-                            new_link = self._connect_to_seeder(seeder_dest)
-                            if new_link:
-                                active_peer_ids.add(seeder_dest)
-                                peer_id = len(workers)
-                                t = threading.Thread(
-                                    target=peer_worker,
-                                    args=(seeder_dest, new_link, peer_id),
-                                    daemon=True
-                                )
-                                workers.append(t)
-                                t.start()
-                                RNS.log(
-                                    f"New peer joined swarm! "
-                                    f"Now {len(active_peer_ids)} peer(s)",
-                                    RNS.LOG_INFO
-                                )
-                except Exception:
-                    pass
-
-            live_want_dest.set_link_established_callback(_on_live_link)
+                live_want_dest = None
 
             # Periodically re-announce want during download
             announce_data = umsgpack.packb({"ghost_hash": self.ghost_hash})
             while not all_done.is_set() and self._running:
                 try:
-                    live_want_dest.announce(app_data=announce_data)
+                    if live_want_dest:
+                        live_want_dest.announce(app_data=announce_data)
                 except Exception:
                     pass
                 # Wait before next re-announce
@@ -455,7 +460,8 @@ class Leecher:
                     time.sleep(1)
 
             # Cleanup
-            self._cleanup_want_dest(live_want_dest)
+            if live_want_dest:
+                self._cleanup_want_dest(live_want_dest)
 
         # Start discovery watcher in background
         watcher = threading.Thread(target=discovery_watcher, daemon=True)
@@ -524,7 +530,37 @@ class Leecher:
         found_lock = threading.Lock()
         first_found = threading.Event()
 
-        # ── Create want-destination ──────────────────────────────
+        # ── Announce handler to catch seeder response-announces ──
+        class SeederResponseHandler:
+            """Catches seeder re-announces triggered by our want."""
+            def __init__(self, target_ghost_hash):
+                self.aspect_filter = None  # Catch ALL announces
+                self._target = target_ghost_hash
+
+            def received_announce(self, destination_hash, announced_identity, app_data):
+                if app_data:
+                    try:
+                        metadata = umsgpack.unpackb(app_data)
+                        gh = metadata.get("ghost_hash", "")
+                        if gh == self._target:
+                            if destination_hash not in failed_dests:
+                                with found_lock:
+                                    if destination_hash not in found_dests:
+                                        found_dests.append(destination_hash)
+                                        RNS.log(
+                                            f"Seeder responded via announce: "
+                                            f"{RNS.prettyhexrep(destination_hash)} "
+                                            f"({len(found_dests)} total)",
+                                            RNS.LOG_INFO
+                                        )
+                                first_found.set()
+                    except Exception:
+                        pass
+
+        response_handler = SeederResponseHandler(input_hash)
+        RNS.Transport.register_announce_handler(response_handler)
+
+        # ── Create want-destination (for future PEX use) ─────────
         want_dest = RNS.Destination(
             self.identity.identity,
             RNS.Destination.IN,
@@ -533,35 +569,6 @@ class Leecher:
             "want",
             input_hash
         )
-
-        def _on_want_link(link):
-            """Seeder connected to our want-destination."""
-            link.set_packet_callback(
-                lambda data, packet: _handle_seeder_response(data, link)
-            )
-
-        def _handle_seeder_response(data, link):
-            """Seeder sent us their dest hash."""
-            try:
-                metadata = umsgpack.unpackb(data)
-                seeder_dest = metadata.get("seeder_dest")
-                if seeder_dest and len(seeder_dest) == 16:
-                    if seeder_dest not in failed_dests:
-                        with found_lock:
-                            if seeder_dest not in found_dests:
-                                found_dests.append(seeder_dest)
-                                RNS.log(
-                                    f"Seeder responded: "
-                                    f"{seeder_dest.hex()[:16]}... "
-                                    f"({len(found_dests)} total)",
-                                    RNS.LOG_INFO
-                                )
-                        first_found.set()
-            except Exception as e:
-                RNS.log(f"Bad seeder response: {e}", RNS.LOG_WARNING)
-
-        want_dest.set_link_established_callback(_on_want_link)
-
         # ── Fast-path: try hint_dest from .ghost file ────────────
         hint_dest = None
         if self.ghost and self.ghost.seeder_dest:

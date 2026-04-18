@@ -276,83 +276,25 @@ class Seeder:
         """
         Respond to a leecher's 'want' announcement.
 
-        Connects to the leecher's want-destination and sends
-        our seeder destination hash so the leecher can connect
-        to us for chunk downloads.
+        Instead of connecting to the leecher (reverse link may fail
+        due to NAT/routing), we simply re-announce our own destination.
+        The leecher's announce handler will catch it and connect to us.
         """
         if not self._running or not self._destination:
             return
 
         try:
-            # Check if we have a path to the leecher
-            if not RNS.Transport.has_path(leecher_dest_hash):
-                RNS.Transport.request_path(leecher_dest_hash)
-                # Wait briefly for path
-                deadline = time.time() + 10
-                while not RNS.Transport.has_path(leecher_dest_hash):
-                    if time.time() > deadline:
-                        RNS.log(
-                            f"No path to leecher {leecher_dest_hash.hex()[:16]}...",
-                            RNS.LOG_WARNING
-                        )
-                        return
-                    time.sleep(0.5)
-
-            # Resolve the leecher's identity
-            leecher_identity = RNS.Identity.recall(leecher_dest_hash)
-            if not leecher_identity:
-                RNS.log(
-                    f"Cannot recall leecher identity",
-                    RNS.LOG_WARNING
-                )
-                return
-
-            # Build the leecher's want-destination so we can link to it
-            leecher_dest = RNS.Destination(
-                leecher_identity,
-                RNS.Destination.OUT,
-                RNS.Destination.SINGLE,
-                config.RNS_APP_NAME,
-                "want",
-                self.ghost.ghost_hash
-            )
-
-            # Create link to the leecher
-            link = RNS.Link(leecher_dest)
-
-            # Wait for link to establish
-            deadline = time.time() + config.DEFAULT_LINK_TIMEOUT
-            while link.status != RNS.Link.ACTIVE:
-                if link.status == RNS.Link.CLOSED:
-                    RNS.log(
-                        "Link to leecher failed",
-                        RNS.LOG_WARNING
-                    )
-                    return
-                if time.time() > deadline:
-                    link.teardown()
-                    return
-                time.sleep(0.2)
-
-            # Send our destination hash to the leecher
-            our_dest_hash = self._destination.hash
-            response_data = umsgpack.packb({
-                "seeder_dest": our_dest_hash,
+            # Re-announce our destination so the leecher discovers us
+            announce_data = umsgpack.packb({
                 "ghost_hash": self.ghost.ghost_hash,
             })
-
-            packet = RNS.Packet(link, response_data)
-            packet.send()
+            self._destination.announce(app_data=announce_data)
 
             RNS.log(
                 f"Responded to want for {self.ghost.name} — "
-                f"sent dest {self._destination.hash.hex()[:16]}...",
+                f"re-announced dest {self._destination.hash.hex()[:16]}...",
                 RNS.LOG_INFO
             )
-
-            # Keep link alive briefly so packet delivers, then teardown
-            time.sleep(2)
-            link.teardown()
 
         except Exception as e:
             RNS.log(
