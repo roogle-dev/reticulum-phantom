@@ -438,10 +438,10 @@ class Seeder:
         # Add our own dest
         if self._destination:
             all_dests.add(self._destination.hash.hex())
-        # Add dests from all other live seeders for this ghost hash
+        # Add dests from other live seeders for THIS ghost hash only
         with WantAnnounceHandler._lock:
             for gh, seeder in WantAnnounceHandler._seeders.items():
-                if seeder._destination:
+                if gh == self.ghost.ghost_hash and seeder._destination:
                     all_dests.add(seeder._destination.hash.hex())
 
         manifest = {
