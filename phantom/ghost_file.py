@@ -44,7 +44,8 @@ class GhostFile:
         self.created_by = ""
         self.comment = ""
         self.source_path = ""     # Original file path for seeding
-        self.seeder_dest = ""    # Seeder's destination hash (for fast discovery)
+        self.seeder_dest = ""    # Primary seeder destination (backward compat)
+        self.seeder_dests = []   # ALL known seeder destinations (for resilience)
 
     @property
     def ghost_hash(self):
@@ -167,7 +168,8 @@ class GhostFile:
             "comment": self.comment,
             # NOTE: source_path intentionally excluded — privacy
             # It would expose the creator's filesystem paths
-            "seeder_dest": self.seeder_dest,
+            "seeder_dest": self.seeder_dest,       # backward compat
+            "seeder_dests": self.seeder_dests,      # all known seeders
             "app_name": config.RNS_APP_NAME,
         }
 
@@ -217,6 +219,11 @@ class GhostFile:
             ghost.comment = data.get("comment", "")
             ghost.source_path = data.get("source_path", "")
             ghost.seeder_dest = data.get("seeder_dest", "")
+            ghost.seeder_dests = data.get("seeder_dests", [])
+
+            # Backward compat: if only seeder_dest exists, seed the list
+            if ghost.seeder_dest and ghost.seeder_dest not in ghost.seeder_dests:
+                ghost.seeder_dests.append(ghost.seeder_dest)
 
             # Validate
             if not ghost.file_hash:

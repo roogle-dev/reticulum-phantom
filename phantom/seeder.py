@@ -216,6 +216,10 @@ class Seeder:
         dest_hex = self._destination.hash.hex()
         self.ghost.seeder_dest = dest_hex
 
+        # Add to seeder list (accumulates across re-seeds)
+        if dest_hex not in self.ghost.seeder_dests:
+            self.ghost.seeder_dests.append(dest_hex)
+
         # Always save ghost file NEXT TO the source file (primary location)
         # This is where users expect to find it for sharing
         if self.ghost.source_path:

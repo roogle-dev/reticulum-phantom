@@ -578,17 +578,22 @@ class Leecher:
             input_hash
         )
 
-        # ── Hint dest from .ghost file (primary discovery) ───────
-        # Per RNS docs, await_path() blocks until the mesh resolves a
-        # path to the destination, or timeout is reached.
-        hint_dest = None
-        if self.ghost and self.ghost.seeder_dest:
-            try:
-                candidate = bytes.fromhex(self.ghost.seeder_dest)
-                if len(candidate) == 16 and candidate not in failed_dests:
-                    hint_dest = candidate
-            except (ValueError, Exception):
-                pass
+        # ── Hint dests from .ghost file (primary discovery) ────────
+        # Try ALL known seeder destinations (like multiple trackers)
+        hint_dests = []
+        if self.ghost:
+            dests_to_try = list(self.ghost.seeder_dests) if self.ghost.seeder_dests else []
+            # Backward compat: also try seeder_dest if not in list
+            if self.ghost.seeder_dest and self.ghost.seeder_dest not in [d for d in dests_to_try]:
+                dests_to_try.insert(0, self.ghost.seeder_dest)
+
+            for dest_hex in dests_to_try:
+                try:
+                    candidate = bytes.fromhex(dest_hex)
+                    if len(candidate) == 16 and candidate not in failed_dests:
+                        hint_dests.append(candidate)
+                except (ValueError, Exception):
+                    pass
 
         # ── Announce "I want X" (for announce-based discovery) ────
         announce_data = umsgpack.packb({
@@ -604,16 +609,19 @@ class Leecher:
             RNS.LOG_INFO
         )
 
-        # ── Primary: await_path to hint_dest (blocking) ──────────
-        if hint_dest:
+        # ── Primary: try all known seeder destinations ────────────
+        for hint_dest in hint_dests:
+            if first_found.is_set():
+                break  # Already found one, no need to try more
+
             RNS.log(
                 f"Requesting path to seeder: "
                 f"{hint_dest.hex()[:16]}...",
                 RNS.LOG_INFO
             )
-            # Block up to 30s waiting for path resolution
+            # Block up to 15s per dest (shorter since we try multiple)
             path_found = RNS.Transport.await_path(
-                hint_dest, timeout=30
+                hint_dest, timeout=15
             )
             if path_found:
                 with found_lock:
@@ -634,27 +642,31 @@ class Leecher:
             if time.time() - last_announce > config.WANT_ANNOUNCE_INTERVAL:
                 announce_data = umsgpack.packb({
                     "ghost_hash": input_hash,
+                    "type": "want",
                     "t": int(time.time()),
                 })
                 want_dest.announce(app_data=announce_data)
                 last_announce = time.time()
 
-                # Re-request hint path
-                if hint_dest and hint_dest not in failed_dests:
-                    path_found = RNS.Transport.await_path(
-                        hint_dest, timeout=15
-                    )
-                    if path_found:
-                        with found_lock:
-                            if hint_dest not in found_dests:
-                                found_dests.append(hint_dest)
-                                RNS.log(
-                                    f"Seeder path resolved: "
-                                    f"{RNS.prettyhexrep(hint_dest)}",
-                                    RNS.LOG_INFO
-                                )
-                        first_found.set()
+                # Re-request all hint paths
+                for hd in hint_dests:
+                    if first_found.is_set():
                         break
+                    if hd not in failed_dests:
+                        path_found = RNS.Transport.await_path(
+                            hd, timeout=10
+                        )
+                        if path_found:
+                            with found_lock:
+                                if hd not in found_dests:
+                                    found_dests.append(hd)
+                                    RNS.log(
+                                        f"Seeder path resolved: "
+                                        f"{RNS.prettyhexrep(hd)}",
+                                        RNS.LOG_INFO
+                                    )
+                            first_found.set()
+                            break
 
                 RNS.log(
                     f"📢 Re-announced want for {input_hash[:16]}...",
