@@ -481,18 +481,27 @@ def cmd_seed_all(args):
                 if not ghost:
                     ui.print_warning(f"Skipping invalid ghost: {os.path.basename(fpath)}")
                     continue
-                # Find source file
-                source_dir = os.path.dirname(fpath)
-                source_path = os.path.join(source_dir, ghost.name)
-                if not os.path.isfile(source_path):
-                    base_path = fpath[:-len(config.GHOST_EXTENSION)]
-                    if os.path.isfile(base_path):
-                        source_path = base_path
+                # Find source file — try stored source_path first
+                source_path = None
+
+                if ghost.source_path and os.path.isfile(ghost.source_path):
+                    source_path = ghost.source_path
+                else:
+                    # Fallback: look next to ghost file
+                    source_dir = os.path.dirname(fpath)
+                    candidate = os.path.join(source_dir, ghost.name)
+                    if os.path.isfile(candidate):
+                        source_path = candidate
                     else:
-                        ui.print_warning(
-                            f"Source file not found for: {ghost.name}"
-                        )
-                        continue
+                        base_path = fpath[:-len(config.GHOST_EXTENSION)]
+                        if os.path.isfile(base_path):
+                            source_path = base_path
+
+                if not source_path:
+                    ui.print_warning(
+                        f"Source file not found for: {ghost.name}"
+                    )
+                    continue
             else:
                 source_path = fpath
                 ghost_path = fpath + config.GHOST_EXTENSION

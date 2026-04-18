@@ -43,6 +43,7 @@ class GhostFile:
         self.created_at = 0
         self.created_by = ""
         self.comment = ""
+        self.source_path = ""     # Original file path for seeding
 
     @property
     def ghost_hash(self):
@@ -90,6 +91,7 @@ class GhostFile:
         ghost.created_at = int(time.time())
         ghost.created_by = identity_hash
         ghost.comment = comment
+        ghost.source_path = os.path.abspath(filepath)
 
         # Validate chunk size
         ghost.chunk_size = max(config.MIN_CHUNK_SIZE,
@@ -162,6 +164,7 @@ class GhostFile:
             "created_at": self.created_at,
             "created_by": self.created_by,
             "comment": self.comment,
+            "source_path": self.source_path,
             "app_name": config.RNS_APP_NAME,
         }
 
@@ -209,6 +212,7 @@ class GhostFile:
             ghost.created_at = data.get("created_at", 0)
             ghost.created_by = data.get("created_by", "")
             ghost.comment = data.get("comment", "")
+            ghost.source_path = data.get("source_path", "")
 
             # Validate
             if not ghost.file_hash:
