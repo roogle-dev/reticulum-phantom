@@ -410,8 +410,6 @@ class PhantomEngine:
                     try:
                         metadata = umsgpack.unpackb(app_data)
                         ghost_hash = metadata.get("ghost_hash", "")
-                        file_name = metadata.get("name", "Unknown")
-                        file_size = metadata.get("size", 0)
 
                         identity_hex = announced_identity.hash.hex()
                         dest_hex = destination_hash.hex()
@@ -433,8 +431,7 @@ class PhantomEngine:
                             peer = engine._peers[identity_hex]
                             peer["last_seen"] = time.time()
                             peer["files"][ghost_hash] = {
-                                "name": file_name,
-                                "size": file_size,
+                                "name": ghost_hash[:16] + "...",
                                 "ghost_hash": ghost_hash,
                                 "dest_hash": dest_hex,
                             }

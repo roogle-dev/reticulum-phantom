@@ -121,11 +121,9 @@ class Seeder:
             self._on_link_established
         )
 
-        # Announce on the mesh
+        # Announce on the mesh — only ghost_hash for privacy
+        # File name/size details are shared only over encrypted links
         announce_data = umsgpack.packb({
-            "name": self.ghost.name,
-            "size": self.ghost.file_size,
-            "chunks": self.ghost.chunk_count,
             "ghost_hash": self.ghost.ghost_hash,
         })
         self._destination.announce(app_data=announce_data)
@@ -187,9 +185,6 @@ class Seeder:
             if self._running and self._destination:
                 try:
                     announce_data = umsgpack.packb({
-                        "name": self.ghost.name,
-                        "size": self.ghost.file_size,
-                        "chunks": self.ghost.chunk_count,
                         "ghost_hash": self.ghost.ghost_hash,
                     })
                     self._destination.announce(app_data=announce_data)
