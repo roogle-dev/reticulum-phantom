@@ -591,6 +591,47 @@ class Leecher:
         discovery_window = config.DEFAULT_DISCOVERY_WINDOW
         start_time = time.time()
 
+        # Proactive check: scan cached app_data for already-known destinations
+        # This catches seeders whose announce was received BEFORE we registered
+        # our handler (handler only fires for NEW announces).
+        try:
+            import RNS.Transport as Transport
+            if hasattr(Transport, 'announce_table'):
+                for dest_hash_hex, entry in list(Transport.announce_table.items()):
+                    try:
+                        dest_bytes = bytes.fromhex(dest_hash_hex) if isinstance(dest_hash_hex, str) else dest_hash_hex
+                        app_data = RNS.Identity.recall_app_data(dest_bytes)
+                        if app_data:
+                            metadata = umsgpack.unpackb(app_data)
+                            gh = metadata.get("ghost_hash", "")
+                            if gh == input_hash and dest_bytes not in failed_dests:
+                                with found_lock:
+                                    if dest_bytes not in found_dests:
+                                        found_dests.append(dest_bytes)
+                                        RNS.log(
+                                            f"Found seeder in cache: "
+                                            f"{RNS.prettyhexrep(dest_bytes)}",
+                                            RNS.LOG_INFO
+                                        )
+                                first_found.set()
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # Also check hint_dest immediately (no 2s delay)
+        if hint_dest and hint_dest not in failed_dests:
+            if RNS.Transport.has_path(hint_dest):
+                hops = RNS.Transport.hops_to(hint_dest)
+                RNS.log(
+                    f"Hint seeder already reachable ({hops} hops) — fast connect!",
+                    RNS.LOG_INFO
+                )
+                with found_lock:
+                    if hint_dest not in found_dests:
+                        found_dests.append(hint_dest)
+                first_found.set()
+
         # Phase 1: Wait for first seeder (patient — up to 120s)
         while not first_found.is_set() and self._running:
             # Check CLI direct dest hash
