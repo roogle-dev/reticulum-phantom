@@ -157,11 +157,8 @@ class TransferRow(Static):
         if t.state in ("complete",):
             actions = "  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]"
         elif t.state in ("failed", "cancelled", "stopped"):
-            if t.direction == "download":
-                actions = ("  [dim][[/dim][bold green]▶ Resume[/bold green][dim]][/dim]"
-                          "  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]")
-            else:
-                actions = "  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]"
+            actions = ("  [dim][[/dim][bold green]▶ Resume[/bold green][dim]][/dim]"
+                      "  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]")
         else:
             actions = "  [dim][[/dim][bold yellow]⏹ Stop[/bold yellow][dim]][/dim]  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]"
 
@@ -985,19 +982,11 @@ class PhantomTUI(App):
                 thread=True,
             )
         elif state in ("failed", "cancelled", "stopped"):
-            # Resume download (or remove seed)
-            with self.engine._lock:
-                transfer = self.engine._transfers.get(transfer_id)
-            if transfer and transfer.direction == "download":
-                self.run_worker(
-                    lambda: self.engine.resume_transfer(transfer_id),
-                    thread=True,
-                )
-            else:
-                self.run_worker(
-                    lambda: self.engine.remove_transfer(transfer_id),
-                    thread=True,
-                )
+            # Resume the transfer (works for both seeds and downloads)
+            self.run_worker(
+                lambda: self.engine.resume_transfer(transfer_id),
+                thread=True,
+            )
         else:
             # Stop the transfer
             self.run_worker(

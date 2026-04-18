@@ -214,6 +214,7 @@ class PhantomEngine:
         )
         transfer.total_chunks = ghost.chunk_count
         transfer.state = "seeding"
+        transfer._source_path = source_path
 
         # Create and start seeder
         seeder = Seeder(ghost, source_path, self._network, self._identity)
@@ -356,9 +357,10 @@ class PhantomEngine:
 
     def resume_transfer(self, transfer_id):
         """
-        Resume a stopped/failed/cancelled download.
-        Removes the old transfer and re-starts using the ghost file.
-        Existing chunks on disk are automatically reused.
+        Resume a stopped/failed/cancelled transfer.
+        Removes the old transfer and re-starts it.
+        For downloads: reuses chunks already on disk.
+        For seeds: re-registers the RNS destination.
         """
         with self._lock:
             transfer = self._transfers.get(transfer_id)
@@ -367,29 +369,37 @@ class PhantomEngine:
             self._add_log("error", "Transfer not found")
             return None
 
-        if transfer.direction != "download":
-            self._add_log("info", f"Cannot resume seed — seeds auto-start")
-            return None
-
-        # Determine what to re-download
-        ghost_path = transfer._ghost_path
-        dest_hash = transfer.destination_hash
         name = transfer.name
 
-        # Remove old transfer
-        with self._lock:
-            self._transfers.pop(transfer_id, None)
+        if transfer.direction == "upload":
+            # Resume seed — re-seed from source path
+            source_path = transfer._source_path
+            with self._lock:
+                self._transfers.pop(transfer_id, None)
 
-        self._add_log("info", f"🔄 Resuming download: {name}")
-
-        # Re-start from ghost file if we have one, otherwise use dest hash
-        if ghost_path and os.path.isfile(ghost_path):
-            return self.download_file(ghost_path)
-        elif dest_hash:
-            return self.download_file(dest_hash)
+            if source_path and os.path.isfile(source_path):
+                self._add_log("info", f"🔄 Resuming seed: {name}")
+                return self.seed_file(source_path)
+            else:
+                self._add_log("error", f"Source file not found for: {name}")
+                return None
         else:
-            self._add_log("error", "Cannot resume — no ghost file or destination hash")
-            return None
+            # Resume download
+            ghost_path = transfer._ghost_path
+            dest_hash = transfer.destination_hash
+
+            with self._lock:
+                self._transfers.pop(transfer_id, None)
+
+            self._add_log("info", f"🔄 Resuming download: {name}")
+
+            if ghost_path and os.path.isfile(ghost_path):
+                return self.download_file(ghost_path)
+            elif dest_hash:
+                return self.download_file(dest_hash)
+            else:
+                self._add_log("error", "Cannot resume — no ghost file or destination hash")
+                return None
 
     def get_transfers(self):
         """Get list of all transfers for display."""
