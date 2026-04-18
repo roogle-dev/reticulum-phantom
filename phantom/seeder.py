@@ -215,18 +215,24 @@ class Seeder:
         # Save destination hash into ghost file for fast leecher discovery
         dest_hex = self._destination.hash.hex()
         self.ghost.seeder_dest = dest_hex
-        # Re-save ghost to library so the .ghost file includes the dest hash
+
+        # Always save ghost file NEXT TO the source file (primary location)
+        # This is where users expect to find it for sharing
+        if self.ghost.source_path:
+            src_ghost = self.ghost.source_path + config.GHOST_EXTENSION
+            self.ghost.save(src_ghost)
+            RNS.log(
+                f"Ghost file saved: {src_ghost}",
+                RNS.LOG_INFO
+            )
+
+        # Also save to the library (backup / catalog)
         config.ensure_directories()
         library_path = os.path.join(
             config.GHOSTS_DIR,
             self.ghost.name + config.GHOST_EXTENSION
         )
         self.ghost.save(library_path)
-        # Also update the source-adjacent ghost if it exists
-        if self.ghost.source_path:
-            src_ghost = self.ghost.source_path + config.GHOST_EXTENSION
-            if os.path.isfile(src_ghost):
-                self.ghost.save(src_ghost)
 
         RNS.log(
             f"Seeding: {self.ghost.name} | "
