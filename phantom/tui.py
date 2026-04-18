@@ -27,6 +27,9 @@ from . import config
 from .engine import PhantomEngine
 from .ghost_file import GhostFile
 
+import os
+import time
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Custom Widgets
@@ -370,8 +373,62 @@ class PhantomTUI(App):
         self._init_network_table()
         self._init_settings_table()
 
+        # Auto-seed files from ghost library
+        self._auto_seed_library()
+
         # Initial refresh
         self._refresh_ui()
+
+    def _auto_seed_library(self):
+        """Auto-seed all files from the ghost library on startup."""
+        try:
+            config.ensure_directories()
+            ghost_dir = config.GHOSTS_DIR
+            if not os.path.isdir(ghost_dir):
+                return
+
+            seeded = 0
+            for entry in os.listdir(ghost_dir):
+                if entry.endswith(config.GHOST_EXTENSION):
+                    ghost_path = os.path.join(ghost_dir, entry)
+                    try:
+                        ghost = GhostFile.load(ghost_path)
+                        if not ghost:
+                            continue
+
+                        # Look for the source file
+                        source_dir = os.path.dirname(ghost_path)
+                        source_path = os.path.join(source_dir, ghost.name)
+
+                        # Also check downloads dir
+                        if not os.path.isfile(source_path):
+                            dl_path = os.path.join(
+                                config.DOWNLOADS_DIR, ghost.name
+                            )
+                            if os.path.isfile(dl_path):
+                                source_path = dl_path
+
+                        # Also check path without .ghost extension
+                        if not os.path.isfile(source_path):
+                            base = ghost_path[:-len(config.GHOST_EXTENSION)]
+                            if os.path.isfile(base):
+                                source_path = base
+
+                        if os.path.isfile(source_path):
+                            tid = self.engine.seed_file(source_path)
+                            if tid:
+                                seeded += 1
+                    except Exception:
+                        pass
+
+            if seeded > 0:
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "info",
+                    "message": f"Auto-seeding {seeded} files from library"
+                })
+        except Exception:
+            pass
 
     def _on_engine_log(self, entry):
         """Handle log events from the engine."""
