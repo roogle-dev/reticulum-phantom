@@ -347,6 +347,10 @@ class PhantomTUI(App):
                     " [bold]📡 Mesh Network[/bold]  "
                     "[dim]ALL nodes visible on the Reticulum mesh[/dim]"
                 )
+                yield Input(
+                    placeholder="Filter by identity or destination hash...",
+                    id="network-filter"
+                )
                 yield DataTable(id="network-table", zebra_stripes=True)
 
             # ─── Settings Tab ────────────────────────────────────────
@@ -655,12 +659,31 @@ class PhantomTUI(App):
             table = self.query_one("#network-table", DataTable)
             table.clear()
 
+            # Get filter text
+            filter_text = ""
+            try:
+                filter_input = self.query_one("#network-filter", Input)
+                filter_text = filter_input.value.strip().lower()
+            except Exception:
+                pass
+
             nodes = self.engine.get_mesh_nodes()
+            matched = 0
+            total = len(nodes)
+
             for node in sorted(nodes, key=lambda n: n.get("last_seen", 0), reverse=True):
                 dest = node.get("dest_short", "Unknown")
                 identity = node.get("identity_short", "Unknown")
                 hops = str(node.get("hops", "?"))
                 app_data = node.get("app_data", "")
+
+                # Apply filter
+                if filter_text:
+                    searchable = f"{dest} {identity} {app_data}".lower()
+                    if filter_text not in searchable:
+                        continue
+
+                matched += 1
 
                 from datetime import datetime
                 try:
@@ -671,6 +694,17 @@ class PhantomTUI(App):
                     last_seen = "Unknown"
 
                 table.add_row(dest, identity, hops, app_data, last_seen)
+
+            # Update header with count
+            if filter_text:
+                try:
+                    header = self.query_one("#tab-network Static")
+                    header.update(
+                        f" [bold]📡 Mesh Network[/bold]  "
+                        f"[dim]Showing {matched}/{total} nodes matching '{filter_text}'[/dim]"
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 
