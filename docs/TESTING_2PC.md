@@ -1,60 +1,149 @@
-# 🧪 Testing Reticulum Phantom Between 2 PCs
+# 🧪 Testing Reticulum Phantom — Multi-PC Guide
 
-A step-by-step guide to test P2P file sharing between two machines over your LAN.
+A step-by-step guide to test P2P file sharing across the internet or LAN using the Reticulum mesh.
+
+> **v0.6.3** — Phantom auto-configures mesh connectivity. No manual Reticulum config needed!
 
 ---
 
-## Prerequisites (Both PCs)
+## Prerequisites (All PCs)
 
 ```bash
 # Install Python 3.8+ then:
 pip install rns rich
 
-# Clone the repo (or copy the folder)
+# Clone the repo (or download the zip)
 git clone https://github.com/roogle-dev/reticulum-phantom.git
 cd reticulum-phantom
+pip install -r requirements.txt
 ```
 
 ---
 
-## Step 1: Find Your IP Addresses
+## Quick Test: 2 PCs Over the Internet
 
-On each PC, find the local IP:
+Phantom auto-enables the [Sideband Hub](https://unsigned.io/sideband/) on first run — giving you instant global mesh connectivity with zero configuration.
 
-**Windows:**
-```powershell
-ipconfig | Select-String "IPv4"
-```
+### PC-A (Seeder)
 
-**Linux/Mac:**
 ```bash
-ip addr show | grep "inet "
-# or
-ifconfig | grep "inet "
+# Seed a file — ghost file is auto-created next to the original
+python phantom.py seed movie.mkv
+
+# Or seed an entire directory
+python phantom.py seed-all /path/to/movies/
 ```
 
-Example:
-- **PC-A (Seeder):** `192.168.1.100`
-- **PC-B (Leecher):** `192.168.1.200`
+Output:
+```
+✓ Seeding 1 files  Press Ctrl+C to stop all
+
+  ↑ movie.mkv | ghost:a1b2c3d4e5f6... | dest:138e6b9ca155dd6f...
+```
+
+The `.ghost` file is saved right next to `movie.mkv` — share it with your friend.
+
+### PC-B (Leecher)
+
+Copy the `.ghost` file from PC-A (email, USB, Discord, etc.), then:
+
+```bash
+python phantom.py download movie.mkv.ghost
+```
+
+Output:
+```
+ℹ Announcing want — waiting for seeders...
+ℹ Requesting path to seeder: 138e6b9ca155...
+ℹ Encrypted link established with seeder ✓
+ℹ Connected to 1 peer(s)
+⠋ Downloading movie.mkv [150/705] ━━━━━━━━╺━━━━━━━━━━━━━━  21%  1.5 MB/s  0:06:12
+```
+
+**That's it.** No IPs, no ports, no firewall rules. The mesh handles everything.
 
 ---
 
-## Step 2: Configure Reticulum for TCP/IP
+## Multi-Seeder Test: 3 PCs
 
-Reticulum needs to know how to reach the other PC. We configure this in the Reticulum config file.
+This tests the swarm — multiple seeders serving the same file simultaneously.
 
-### PC-A (Seeder) — Acts as the TCP Server
+### PC-A: Original Seeder
 
-Edit the Reticulum config:
-- **Windows:** `%USERPROFILE%\.reticulum\config`
-- **Linux/Mac:** `~/.reticulum/config`
-
-If the file doesn't exist yet, run this once to auto-generate it:
 ```bash
-python -c "import RNS; RNS.Reticulum()"
+python phantom.py seed-all /path/to/files/
+# → Ghost files created next to each file
+# → Share the .ghost files with PC-B and PC-C
 ```
 
-Now edit the config and add this at the bottom under `[interfaces]`:
+### PC-B: Download + Re-seed
+
+```bash
+# Download the file
+python phantom.py download movie.mkv.ghost -o ~/Downloads
+
+# After download completes, re-seed it
+python phantom.py seed ~/Downloads/movie.mkv
+# → YOUR dest is added to the ghost file's seeder_dests list
+# → Share YOUR .ghost file — it now contains BOTH seeders!
+```
+
+### PC-C: Download from Swarm
+
+```bash
+# Use PC-B's .ghost file (has both PC-A and PC-B as seeders)
+python phantom.py download movie.mkv.ghost
+# → Tries PC-A dest, then PC-B dest
+# → Downloads chunks from ALL reachable seeders simultaneously
+# → If PC-A goes offline, PC-B picks up the remaining chunks
+```
+
+---
+
+## Verifying Mesh Connectivity
+
+### Check Sideband Hub is Enabled
+
+```bash
+# Linux/Mac
+cat ~/.reticulum/config | grep -A2 "Sideband"
+
+# Windows (PowerShell)
+type $env:USERPROFILE\.reticulum\config | Select-String "enabled|Sideband"
+```
+
+You should see:
+```ini
+[[Sideband Hub]]
+    type = TCPClientInterface
+    enabled = Yes
+    target_host = sideband.connect.reticulum.network
+    target_port = 7822
+```
+
+> Phantom auto-enables this on first run. If it's `enabled = No`, just change it to `Yes` and restart.
+
+### Test Path Resolution
+
+```bash
+# Check if a seeder destination is reachable on the mesh
+rnpath <destination_hash> -w 10
+```
+
+Expected output:
+```
+Path found, destination <138e6b9ca155dd6f...> is 2 hops away via <521c87a8...> on TCPInterface[Sideband Hub]
+```
+
+---
+
+## LAN Testing (Optional)
+
+If you want to test on a local network without the Sideband Hub:
+
+### PC-A: Add a TCP Server
+
+Edit `~/.reticulum/config` (or `%USERPROFILE%\.reticulum\config` on Windows):
 
 ```ini
   [[Phantom TCP Server]]
@@ -64,118 +153,44 @@ Now edit the config and add this at the bottom under `[interfaces]`:
     enabled = yes
 ```
 
-### PC-B (Leecher) — Connects to PC-A
-
-Edit the same Reticulum config on PC-B, add:
+### PC-B: Connect to PC-A
 
 ```ini
   [[Phantom TCP Client]]
     type = TCPClientInterface
-    target_host = 192.168.1.100
+    target_host = 192.168.1.100  # PC-A's IP
     target_port = 4242
     enabled = yes
 ```
 
 > ⚠️ Replace `192.168.1.100` with PC-A's actual IP address!
 
----
+### Firewall (Windows)
 
-## Step 3: Create Identity (Both PCs)
-
-On **both** PCs:
-
-```bash
-python phantom.py identity --new
-```
-
-You'll see something like:
-```
-✓ New identity created!
-🔑 Identity Hash  <a1b2c3d4e5f6...>
+```powershell
+# Run as Administrator
+netsh advfirewall firewall add rule name="Reticulum Phantom" dir=in action=allow protocol=tcp localport=4242
 ```
 
 ---
 
-## Step 4: Seed a File (PC-A)
+## Same-PC Testing (Two Terminals)
 
-Create a test file and start seeding:
-
-```bash
-# Create a dummy test file (or use any file you want)
-echo "Hello from Reticulum Phantom!" > testfile.txt
-
-# Or create something bigger:
-# python -c "open('testfile.bin','wb').write(b'X'*5000000)"  # 5MB file
-
-# Start seeding
-python phantom.py seed testfile.txt
-```
-
-You'll see output like:
-```
-👻 Phantom Seeder
-↑ SEEDING  testfile.txt
-
-Ghost Hash:   a1b2c3d4e5f6789012345678
-Destination:  <f0e1d2c3b4a5...>
-
-Share the ghost hash with peers so they can download.
-Press Ctrl+C to stop seeding.
-```
-
-**Copy the Destination hash** — you'll need it on PC-B.
-
----
-
-## Step 5: Download the File (PC-B)
-
-On PC-B, use the **destination hash** from PC-A:
-
-```bash
-python phantom.py download <paste_the_destination_hash_here>
-```
-
-For example:
-```bash
-python phantom.py download f0e1d2c3b4a596877463524130
-```
-
-You should see:
-```
-ℹ Searching mesh for seeder...
-ℹ Establishing encrypted link...
-ℹ Fetching manifest from seeder...
-Downloading testfile.txt  ████████████████  100%  2.1 KB/s  0:00:02
-
-✓ DOWNLOAD COMPLETE
-File:       testfile.txt
-Size:       30 B
-Time:       2s
-```
-
----
-
-## Alternative: Test on Same PC (Two Terminals)
-
-You can also test locally without 2 PCs! Reticulum's `AutoInterface` auto-discovers peers on localhost.
+You can test locally without multiple PCs. Reticulum's shared transport instance handles it.
 
 **Terminal 1:**
 ```bash
-cd reticulum-phantom
 python phantom.py seed testfile.txt
 ```
 
 **Terminal 2:**
 ```bash
-cd reticulum-phantom
-python phantom.py download <destination_hash_from_terminal_1>
+python phantom.py download testfile.txt.ghost
 ```
-
-> This works because RNS automatically creates a shared transport instance on the same machine.
 
 ---
 
-## Step 6: Debug Mode
+## Debug Mode
 
 If something doesn't connect, use debug mode to see all RNS activity:
 
@@ -183,69 +198,62 @@ If something doesn't connect, use debug mode to see all RNS activity:
 python phantom.py debug
 ```
 
-This shows:
-- Interface discovery
-- Announce propagation
-- Path requests
-- Link establishment
-- Packet flow
+This shows interface discovery, announce propagation, path requests, link establishment, and packet flow.
 
 ---
 
 ## Troubleshooting
 
-| Problem | Fix |
-|---------|-----|
-| `Seeder not found on mesh` | Check firewall — port 4242 must be open on PC-A |
-| `Link establishment timed out` | Verify the IP address in PC-B's Reticulum config |
-| `Cannot recall seeder identity` | The seeder needs to announce first — wait ~10 seconds |
-| No output on `debug` | Make sure Reticulum config has the TCP interface enabled |
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| `Link establishment timed out` | Sideband Hub disabled | Check `~/.reticulum/config` — set `enabled = Yes` under `[[Sideband Hub]]` |
+| Seeder found instantly but link fails | Stale cached path | Restart the seeder, wait 10s, retry download |
+| `Destination hash mismatch` | Leecher found another leecher, not a seeder | Update to v0.6.2+ (type filtering fix) |
+| Progress shows 1% with 600+ chunks done | Stale progress bar code | Update to v0.6.3 (progress fix) |
+| Speed shows 500+ MB/s | Cached chunks counted as transfer | Update to v0.6.3 (speed fix) |
+| `WinError 10038` socket error | Sideband Hub TCP dropped | Usually auto-reconnects. Restart if persistent |
+| No seeders found | Ghost file missing `seeder_dest` | Re-generate ghost file from seeder, or wait for announce discovery (~1-2 min) |
 
-### Firewall Rules (Windows)
+---
 
-If you're on Windows, you may need to allow the port:
+## Architecture Diagram
 
-```powershell
-# Run as Administrator
-netsh advfirewall firewall add rule name="Reticulum Phantom" dir=in action=allow protocol=tcp localport=4242
+```
+  PC-A (Seeder)                      Sideband Hub                     PC-B (Leecher)
+ ┌──────────────┐                  ┌──────────────┐                 ┌──────────────┐
+ │ phantom seed │   TCP :7822      │  reticulum   │    TCP :7822    │   phantom    │
+ │  movie.mkv   │◄────────────────►│  .network    │◄──────────────►│  download    │
+ │              │                  │  (relay)     │                 │  movie.ghost │
+ │  announces:  │                  └──────────────┘                 │              │
+ │  type=seeder │                                                   │  discovers:  │
+ │  ghost_hash  │ ◄──── E2E encrypted link (X25519) ─────────────► │  await_path  │
+ └──────────────┘       chunks + verify + assemble                  └──────────────┘
+       ↕                                                                   ↕
+ ┌──────────────┐                                                   ┌──────────────┐
+ │  .ghost file │  ──── shared via email/USB/Discord ────────────►  │  .ghost file │
+ │  seeder_dests│                                                   │  hint_dests  │
+ └──────────────┘                                                   └──────────────┘
 ```
 
-### Verify Connectivity
+### Key Points
 
-Test basic TCP connectivity between the PCs:
-
-```powershell
-# On PC-B, test if you can reach PC-A
-Test-NetConnection -ComputerName 192.168.1.100 -Port 4242
-```
+- **Sideband Hub** is a public Reticulum relay — it routes packets but **cannot read content** (E2E encrypted)
+- **Ghost files** contain seeder destinations for fast discovery (like multi-tracker torrents)
+- **Announce type filtering** ensures leechers only connect to actual seeders, not other leechers
+- **Auto-failover** redistributes chunks when a seeder drops mid-transfer
 
 ---
 
 ## Quick Reference
 
-| Command | PC-A (Seeder) | PC-B (Leecher) |
-|---------|--------------|-----------------|
-| Setup | `python phantom.py identity --new` | `python phantom.py identity --new` |
-| Share | `python phantom.py seed myfile.zip` | — |
-| Get | — | `python phantom.py download <hash>` |
-| Debug | `python phantom.py debug` | `python phantom.py debug` |
-
----
-
-## Network Diagram
-
-```
-  PC-A (Seeder)                          PC-B (Leecher)
- ┌──────────────┐                      ┌──────────────┐
- │ phantom seed │                      │   phantom    │
- │  myfile.zip  │                      │  download    │
- │              │    TCP/IP :4242      │   <hash>     │
- │  RNS Server  │◄────────────────────►│  RNS Client  │
- │  0.0.0.0     │   E2E Encrypted     │  → PC-A IP   │
- └──────────────┘                      └──────────────┘
-       ↑                                      ↓
-   announce()                          request_path()
-   serve chunks                        download chunks
-                                       verify hashes
-                                       assemble file ✓
-```
+| Action | Command |
+|--------|---------|
+| Seed a file | `python phantom.py seed movie.mkv` |
+| Seed a directory | `python phantom.py seed-all /path/to/files/` |
+| Download | `python phantom.py download movie.mkv.ghost` |
+| Download to folder | `python phantom.py download movie.mkv.ghost -o ~/Desktop` |
+| Check identity | `python phantom.py identity` |
+| Create identity | `python phantom.py identity --new` |
+| Debug mode | `python phantom.py debug` |
+| Clean downloads | `python phantom.py clean` |
+| Clean everything | `python phantom.py clean --all` |
