@@ -129,16 +129,27 @@ class PhantomNetwork:
 
     def get_interfaces(self):
         """
-        Get a list of active Reticulum interfaces.
+        Get a list of Reticulum interfaces.
+
+        Combines live interfaces from RNS.Transport with
+        configured interfaces from the Reticulum config file
+        (needed because shared-instance clients only see
+        LocalClientInterface, not the real TCP/LoRa interfaces).
 
         Returns:
             List of dicts with interface info.
         """
         interfaces = []
+        live_names = set()
+
+        # 1. Live interfaces from RNS.Transport
         try:
             for iface in RNS.Transport.interfaces:
+                name = getattr(iface, "name", "Unknown")
+                live_names.add(name)
+
                 info = {
-                    "name": getattr(iface, "name", "Unknown"),
+                    "name": name,
                     "type": type(iface).__name__,
                     "online": getattr(iface, "online", False),
                 }
@@ -160,7 +171,78 @@ class PhantomNetwork:
                 interfaces.append(info)
         except Exception:
             pass
+
+        # 2. Configured interfaces from Reticulum config
+        # (shows Sideband Hub etc. that the shared instance manages)
+        try:
+            config_dir = self._configpath or os.path.join(
+                os.path.expanduser("~"), ".reticulum"
+            )
+            config_file = os.path.join(config_dir, "config")
+
+            if os.path.isfile(config_file):
+                with open(config_file, "r") as f:
+                    lines = f.readlines()
+
+                current_iface = None
+                current_props = {}
+
+                for line in lines:
+                    stripped = line.strip()
+
+                    # Interface section header: [[Name]]
+                    if stripped.startswith("[[") and stripped.endswith("]]"):
+                        # Save previous interface
+                        if current_iface and current_iface not in live_names:
+                            self._add_config_interface(
+                                interfaces, current_iface, current_props
+                            )
+                        current_iface = stripped[2:-2].strip()
+                        current_props = {}
+                        continue
+
+                    # Properties inside interface block
+                    if current_iface and "=" in stripped:
+                        key, _, val = stripped.partition("=")
+                        current_props[key.strip().lower()] = val.strip()
+
+                # Don't forget the last interface
+                if current_iface and current_iface not in live_names:
+                    self._add_config_interface(
+                        interfaces, current_iface, current_props
+                    )
+        except Exception:
+            pass
+
         return interfaces
+
+    @staticmethod
+    def _add_config_interface(interfaces, name, props):
+        """Add a configured (non-live) interface to the list."""
+        enabled = props.get("enabled", "yes").lower()
+        if enabled == "no":
+            return  # Skip disabled interfaces
+
+        iface_type = props.get("type", "Unknown")
+        details = ""
+
+        if "target_host" in props:
+            port = props.get("target_port", "?")
+            details = f"{props['target_host']}:{port}"
+        elif "listen_ip" in props:
+            port = props.get("listen_port", "?")
+            details = f"{props['listen_ip']}:{port}"
+        elif "port" in props:
+            details = props["port"]
+
+        interfaces.append({
+            "name": f"{name} (config)",
+            "type": iface_type,
+            "online": True,  # Assumed online if enabled
+            "details": details,
+            "rxb": 0,
+            "txb": 0,
+        })
 
     def _ensure_sideband_hub(self):
         """
