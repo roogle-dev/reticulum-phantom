@@ -345,18 +345,30 @@ def cmd_seed(args):
                 )
                 sys.exit(1)
     else:
-        # Regular file — create .ghost first
+        # Regular file — check if .ghost already exists
         source_path = filepath
+        ghost_path = filepath + config.GHOST_EXTENSION
 
-        ui.print_info(f"Creating ghost for: {os.path.basename(filepath)}")
-        with ui.console.status("[bold cyan]Hashing file...", spinner="dots"):
-            ghost = GhostFile.create(filepath)
+        if os.path.isfile(ghost_path):
+            # Reuse existing .ghost file
+            ui.print_info(
+                f"Found existing ghost: {os.path.basename(ghost_path)}"
+            )
+            ghost = GhostFile.load(ghost_path)
+            if not ghost:
+                ui.print_warning("Existing ghost file is invalid, recreating...")
+                ghost = None
 
-        if not ghost:
-            ui.print_error("Failed to create ghost")
-            sys.exit(1)
+        if not os.path.isfile(ghost_path) or ghost is None:
+            ui.print_info(f"Creating ghost for: {os.path.basename(filepath)}")
+            with ui.console.status("[bold cyan]Hashing file...", spinner="dots"):
+                ghost = GhostFile.create(filepath)
 
-        ghost.save()
+            if not ghost:
+                ui.print_error("Failed to create ghost")
+                sys.exit(1)
+
+            ghost.save()
 
     # Start the network
     ui.print_info("Starting Reticulum Network Stack...")
