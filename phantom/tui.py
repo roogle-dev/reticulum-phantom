@@ -136,9 +136,19 @@ class TransferRow(Static):
 
         # Size info
         size_str = GhostFile._human_size(t.bytes_transferred)
-        chunks_str = ""
-        if t.total_chunks:
-            chunks_str = f"[dim]Chunks:[/dim] {t.chunks_done}/{t.total_chunks}"
+
+        # Chunks info differs for seed vs download
+        if t.direction == "upload":
+            # Seeds: show chunks served (not out of total)
+            chunks_str = f"[dim]Served:[/dim] {t.chunks_done} chunks" if t.chunks_done else ""
+            # No progress % for seeds — replace with uploaded size
+            pct_str = f"↑ {size_str}"
+            line2 = f"   {pct_str}  {chunks_str}  {state_str}"
+        else:
+            chunks_str = ""
+            if t.total_chunks:
+                chunks_str = f"[dim]Chunks:[/dim] {t.chunks_done}/{t.total_chunks}"
+            line2 = f"   [cyan]{bar}[/cyan] {pct:5.1f}%  {size_str}  {chunks_str}  {state_str}"
 
         # Destination hash
         dest_str = ""
@@ -163,7 +173,6 @@ class TransferRow(Static):
             actions = "  [dim][[/dim][bold yellow]⏹ Stop[/bold yellow][dim]][/dim]  [dim][[/dim][bold red]✕ Remove[/bold red][dim]][/dim]"
 
         line1 = f" {arrow}  [bold]{name}[/bold]{ghost_str}{actions}"
-        line2 = f"   [cyan]{bar}[/cyan] {pct:5.1f}%  {size_str}  {chunks_str}  {state_str}"
 
         content = line1 + "\n" + line2 + dest_str
         return Text.from_markup(content)
