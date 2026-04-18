@@ -27,7 +27,7 @@ DEFAULT_CHUNK_SIZE = 1_048_576    # 1 MB
 MIN_CHUNK_SIZE = 65_536           # 64 KB
 MAX_CHUNK_SIZE = 16_777_216       # 16 MB
 
-DEFAULT_ANNOUNCE_INTERVAL = 30     # TESTING: 30s (change to 10800 for production = 3h)
+DEFAULT_ANNOUNCE_INTERVAL = 900     # 15 min — seeder heartbeat (keeps mesh path alive)
 ANNOUNCE_STAGGER_PER_FILE = 2     # seconds between each file's initial announce in seed-all
 DEFAULT_TRANSFER_TIMEOUT = 120    # seconds (for data transfers)
 DEFAULT_LINK_TIMEOUT = 10         # seconds (for link establishment — fast failover)
@@ -36,6 +36,7 @@ DEFAULT_DISCOVERY_WINDOW = 5      # seconds to collect seeders (more join during
 MAX_SWARM_PEERS = 5               # max simultaneous peer connections
 
 # Reverse discovery: leecher announces "I want X", seeders respond
+# Only runs during active discovery (fallback when ghost file dests fail)
 WANT_ANNOUNCE_INTERVAL = 30       # seconds between want re-announces
 
 # TCP/IP defaults for initial transport
