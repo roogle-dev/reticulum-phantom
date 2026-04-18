@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "reticulum-phantom"
+version = "0.1.0"
+description = "Decentralized, encrypted P2P file sharing over the Reticulum mesh network"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.8"
+authors = [
+    {name = "Reticulum Phantom Contributors"},
+]
+keywords = ["reticulum", "p2p", "mesh", "file-sharing", "decentralized", "encrypted", "torrent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: File Sharing",
+    "Topic :: System :: Networking",
+    "Topic :: Security :: Cryptography",
+]
+dependencies = [
+    "rns>=0.9.0",
+    "rich>=13.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/roogle-dev/reticulum-phantom"
+Documentation = "https://github.com/roogle-dev/reticulum-phantom#readme"
+Repository = "https://github.com/roogle-dev/reticulum-phantom"
+"Bug Tracker" = "https://github.com/roogle-dev/reticulum-phantom/issues"
+
+[project.scripts]
+phantom = "phantom.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["phantom*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
