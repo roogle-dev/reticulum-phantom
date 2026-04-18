@@ -196,23 +196,45 @@ class PhantomNetwork:
         Disable AutoInterface to prevent IPv6 'label too long' errors
         on Windows. Sideband Hub provides global mesh connectivity.
         """
+        import sys
+        if sys.platform != "win32":
+            return  # Only needed on Windows
+
         try:
-            # Check if AutoInterface is enabled
-            if "[[Default Interface]]" in content:
-                import re
-                # Find the Default Interface block and disable it
-                new_content = re.sub(
-                    r'(\[\[Default Interface\]\].*?enabled\s*=\s*)Yes',
-                    r'\1No',
-                    content,
-                    flags=re.DOTALL | re.IGNORECASE
+            if "[[Default Interface]]" not in content:
+                return
+
+            # Line-by-line: find enabled=Yes ONLY inside [[Default Interface]] block
+            lines = content.splitlines(True)  # Keep line endings
+            in_default_block = False
+            modified = False
+
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+
+                # Detect entering [[Default Interface]] block
+                if stripped == "[[Default Interface]]":
+                    in_default_block = True
+                    continue
+
+                # Detect leaving block (new [[ section starts)
+                if stripped.startswith("[[") and in_default_block:
+                    in_default_block = False
+                    continue
+
+                # Only modify enabled inside Default Interface block
+                if in_default_block and stripped.lower().startswith("enabled"):
+                    if "yes" in stripped.lower():
+                        lines[i] = line.replace("Yes", "No").replace("yes", "No")
+                        modified = True
+                        in_default_block = False  # Done
+
+            if modified:
+                with open(config_file, "w") as f:
+                    f.write("".join(lines))
+                RNS.log(
+                    "Disabled AutoInterface (using Sideband Hub instead)",
+                    RNS.LOG_INFO
                 )
-                if new_content != content:
-                    with open(config_file, "w") as f:
-                        f.write(new_content)
-                    RNS.log(
-                        "Disabled AutoInterface (using Sideband Hub instead)",
-                        RNS.LOG_INFO
-                    )
         except Exception:
             pass
