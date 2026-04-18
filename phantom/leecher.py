@@ -331,30 +331,29 @@ class Leecher:
                 RNS.LOG_INFO
             )
 
-        # Strategy 1: Use seeder_dest from ghost file (fastest)
+        # === Discovery Strategy ===
+        # Ghost files: announce-only discovery (seeder_dest is just a hint)
+        # Direct dest hash: try path request + announce fallback
         dest_hash = None
+        hint_dest = None  # Non-blocking hint from ghost file
+
+        # Hint: request path for ghost file's seeder_dest (non-blocking)
         if self.ghost and self.ghost.seeder_dest:
             try:
                 candidate = bytes.fromhex(self.ghost.seeder_dest)
                 if len(candidate) == 16 and candidate not in failed_dests:
                     RNS.log(
-                        f"Using seeder dest from ghost file: {self.ghost.seeder_dest}",
+                        f"Requesting path to known seeder (hint): "
+                        f"{self.ghost.seeder_dest[:16]}...",
                         RNS.LOG_INFO
                     )
                     RNS.Transport.request_path(candidate)
-                    dest_hash = candidate
-                elif candidate in failed_dests:
-                    RNS.log(
-                        f"Ghost file seeder {self.ghost.seeder_dest[:16]}... "
-                        f"already failed, waiting for announce...",
-                        RNS.LOG_INFO
-                    )
+                    hint_dest = candidate  # Just a hint, not blocking
             except (ValueError, Exception):
                 pass
 
-        # Strategy 2: If input_hash looks like a destination hash, try direct
-        # Skip this if we have a ghost file — input_hash is a ghost_hash, not a dest
-        if not dest_hash and not self.ghost:
+        # Strategy: Direct dest hash from CLI (not ghost file)
+        if not self.ghost:
             try:
                 candidate = bytes.fromhex(input_hash)
                 if len(candidate) == 16 and candidate not in failed_dests:
@@ -377,7 +376,6 @@ class Leecher:
                                     RNS.LOG_INFO
                                 )
                                 self.ghost_hash = real_ghost
-                                # Update announce handler target
                                 handler._target = real_ghost
                         except Exception:
                             pass
@@ -389,15 +387,16 @@ class Leecher:
             except (ValueError, Exception):
                 pass
 
-        # Wait for discovery — patient retry loop
+        # Wait for discovery — announce-first with hint fallback
         retry_interval = 15
         last_request = time.time()
         attempt = 1
+        hint_checked = False
 
-        RNS.log("Waiting for seeder (will keep retrying)...", RNS.LOG_INFO)
+        RNS.log("Waiting for seeder announce...", RNS.LOG_INFO)
 
         while not found_event.is_set():
-            # Check direct path (only if not in failed list)
+            # Check direct dest hash path (CLI mode only)
             if dest_hash and dest_hash not in failed_dests:
                 if RNS.Transport.has_path(dest_hash):
                     hops = RNS.Transport.hops_to(dest_hash)
@@ -407,7 +406,20 @@ class Leecher:
                     )
                     return dest_hash
 
-            # Re-request path periodically
+            # Check hint path (ghost file seeder_dest) — only after 2s
+            # to give announces a chance to arrive first
+            if hint_dest and not hint_checked:
+                if time.time() - last_request > 2:
+                    hint_checked = True
+                    if RNS.Transport.has_path(hint_dest):
+                        hops = RNS.Transport.hops_to(hint_dest)
+                        RNS.log(
+                            f"Hint seeder reachable ({hops} hops), trying...",
+                            RNS.LOG_INFO
+                        )
+                        return hint_dest
+
+            # Re-request path periodically (CLI direct hash only)
             if dest_hash and dest_hash not in failed_dests:
                 if time.time() - last_request > retry_interval:
                     attempt += 1
