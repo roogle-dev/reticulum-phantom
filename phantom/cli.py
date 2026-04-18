@@ -458,11 +458,40 @@ def cmd_seed(args):
 
     ui.print_seeding_started(seeder.get_stats())
 
-    # Keep running until Ctrl+C
+    # Keep running until Ctrl+C — with activity logging
+    prev_chunks = 0
+    prev_peers = 0
     try:
         while True:
             time.sleep(5)
-            ui.print_seeding_status(seeder.get_stats())
+            try:
+                stats = seeder.get_stats()
+                peers = stats["active_peers"]
+                chunks = stats["chunks_served"]
+
+                if peers != prev_peers:
+                    if peers > prev_peers:
+                        ui.console.print(
+                            f"\n  [bold green]⚡ Peer connected![/bold green] "
+                            f"Now {peers} active peer(s)"
+                        )
+                    else:
+                        ui.console.print(
+                            f"\n  [dim]Peer disconnected. "
+                            f"Now {peers} active peer(s)[/dim]"
+                        )
+                    prev_peers = peers
+
+                if chunks > prev_chunks:
+                    ui.console.print(
+                        f"\n  [cyan]↑[/cyan] Served {chunks - prev_chunks} chunk(s) "
+                        f"| Total: {chunks} chunks, {stats['total_uploaded_human']}"
+                    )
+                    prev_chunks = chunks
+
+                ui.print_seeding_status(stats)
+            except Exception:
+                pass
     except KeyboardInterrupt:
         ui.console.print()
         seeder.stop()
@@ -585,22 +614,54 @@ def cmd_seed_all(args):
     )
     ui.console.print()
 
-    # Keep running — show combined stats
+    # Keep running — show combined stats with activity log
+    prev_chunks = 0
+    prev_peers = 0
+    prev_uploaded = 0
     try:
         while True:
             time.sleep(5)
-            total_peers = sum(s.get_stats()["active_peers"] for s in seeders)
-            total_chunks = sum(s.get_stats()["chunks_served"] for s in seeders)
-            total_uploaded = sum(s.get_stats()["total_uploaded"] for s in seeders)
-            uploaded_str = GhostFile._human_size(total_uploaded)
+            try:
+                total_peers = sum(s.get_stats()["active_peers"] for s in seeders)
+                total_chunks = sum(s.get_stats()["chunks_served"] for s in seeders)
+                total_uploaded = sum(s.get_stats()["total_uploaded"] for s in seeders)
+                uploaded_str = GhostFile._human_size(total_uploaded)
 
-            ui.console.print(
-                f"  [green]↑[/green] Files: {len(seeders)} | "
-                f"Peers: {total_peers} | "
-                f"Chunks served: {total_chunks} | "
-                f"Uploaded: {uploaded_str}",
-                end="\r"
-            )
+                # Log activity changes
+                if total_peers != prev_peers:
+                    if total_peers > prev_peers:
+                        ui.console.print(
+                            f"\n  [bold green]⚡ Peer connected![/bold green] "
+                            f"Now {total_peers} active peer(s)"
+                        )
+                    elif total_peers < prev_peers:
+                        ui.console.print(
+                            f"\n  [dim]Peer disconnected. "
+                            f"Now {total_peers} active peer(s)[/dim]"
+                        )
+                    prev_peers = total_peers
+
+                if total_chunks > prev_chunks:
+                    new_chunks = total_chunks - prev_chunks
+                    new_bytes = GhostFile._human_size(total_uploaded - prev_uploaded)
+                    ui.console.print(
+                        f"\n  [cyan]↑[/cyan] Served {new_chunks} chunk(s) "
+                        f"({new_bytes}) | Total: {total_chunks} chunks, {uploaded_str}"
+                    )
+                    prev_chunks = total_chunks
+                    prev_uploaded = total_uploaded
+
+                # Status line (overwrite)
+                ui.console.print(
+                    f"  [green]↑[/green] Files: {len(seeders)} | "
+                    f"Peers: {total_peers} | "
+                    f"Chunks served: {total_chunks} | "
+                    f"Uploaded: {uploaded_str}",
+                    end="\r"
+                )
+            except Exception:
+                # Socket errors, RNS issues — don't crash the seeder
+                pass
     except KeyboardInterrupt:
         ui.console.print()
         for s in seeders:
