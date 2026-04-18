@@ -189,11 +189,13 @@ class Leecher:
                     RNS.LOG_INFO
                 )
 
-                # Step 3: Get manifest if needed (from first peer)
-                if not self.ghost:
-                    self._set_state(self.STATE_FETCHING_MANIFEST)
-                    first_link = active_links[0][1]  # (dest_hash, link)
-                    if not self._fetch_manifest(first_link):
+                # Step 3: Get manifest from first peer
+                # Always fetch — even with local ghost — to learn about new seeders
+                self._set_state(self.STATE_FETCHING_MANIFEST)
+                first_link = active_links[0][1]  # (dest_hash, link)
+                if not self._fetch_manifest(first_link):
+                    if not self.ghost:
+                        # No ghost at all — can't proceed without manifest
                         for dh, lk in active_links:
                             failed_dests.add(dh)
                             try:
@@ -202,32 +204,37 @@ class Leecher:
                                 pass
                         time.sleep(2)
                         continue
+                    # If we already had a local ghost, manifest failure is non-fatal
+                    RNS.log(
+                        "Manifest fetch failed but local ghost is available, continuing...",
+                        RNS.LOG_WARNING
+                    )
 
-                    # After manifest: connect to additional seeders we just learned about
-                    if self.ghost and self.ghost.seeder_dests:
-                        new_dests = []
-                        already_connected = {dh for dh, _ in active_links}
-                        for dest_hex in self.ghost.seeder_dests:
-                            try:
-                                dest_bytes = bytes.fromhex(dest_hex)
-                                if (len(dest_bytes) == 16
-                                        and dest_bytes not in already_connected
-                                        and dest_bytes not in failed_dests):
-                                    new_dests.append(dest_bytes)
-                            except (ValueError, Exception):
-                                pass
+                # Connect to additional seeders we learned about (from manifest or local ghost)
+                if self.ghost and self.ghost.seeder_dests:
+                    new_dests = []
+                    already_connected = {dh for dh, _ in active_links}
+                    for dest_hex in self.ghost.seeder_dests:
+                        try:
+                            dest_bytes = bytes.fromhex(dest_hex)
+                            if (len(dest_bytes) == 16
+                                    and dest_bytes not in already_connected
+                                    and dest_bytes not in failed_dests):
+                                new_dests.append(dest_bytes)
+                        except (ValueError, Exception):
+                            pass
 
-                        if new_dests:
-                            RNS.log(
-                                f"Manifest revealed {len(new_dests)} additional seeder(s), connecting...",
-                                RNS.LOG_INFO
-                            )
-                            extra_links = self._connect_to_seeders(new_dests, failed_dests)
-                            active_links.extend(extra_links)
-                            RNS.log(
-                                f"Swarm: {len(active_links)} total peer(s) connected",
-                                RNS.LOG_INFO
-                            )
+                    if new_dests:
+                        RNS.log(
+                            f"Swarm has {len(new_dests)} additional seeder(s), connecting...",
+                            RNS.LOG_INFO
+                        )
+                        extra_links = self._connect_to_seeders(new_dests, failed_dests)
+                        active_links.extend(extra_links)
+                        RNS.log(
+                            f"Swarm: {len(active_links)} total peer(s) connected",
+                            RNS.LOG_INFO
+                        )
 
                 # Step 4: Download chunks from ALL peers
                 self._set_state(self.STATE_DOWNLOADING)
