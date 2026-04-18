@@ -372,11 +372,37 @@ class Leecher:
         Returns:
             True if manifest received and parsed successfully.
         """
+        response_event = threading.Event()
+        response_data = [None]  # Mutable container for callback
+        response_failed = [False]
+
+        def on_response(receipt):
+            try:
+                response_data[0] = receipt.response
+                RNS.log(
+                    f"Manifest response received ({len(response_data[0])} bytes)",
+                    RNS.LOG_INFO
+                )
+            except Exception as e:
+                RNS.log(f"Error reading manifest response: {e}", RNS.LOG_ERROR)
+                response_failed[0] = True
+            response_event.set()
+
+        def on_failed(receipt):
+            RNS.log(
+                f"Manifest request failed (status: {receipt.status})",
+                RNS.LOG_ERROR
+            )
+            response_failed[0] = True
+            response_event.set()
+
+        RNS.log("Sending manifest request...", RNS.LOG_INFO)
+
         receipt = link.request(
             "manifest",
             data=None,
-            response_callback=None,
-            failed_callback=None,
+            response_callback=on_response,
+            failed_callback=on_failed,
             timeout=config.DEFAULT_TRANSFER_TIMEOUT
         )
 
@@ -384,54 +410,52 @@ class Leecher:
             self._fail("Failed to send manifest request")
             return False
 
-        # Wait for response
-        start = time.time()
-        while receipt.get_status() == RNS.RequestReceipt.SENT or \
-              receipt.get_status() == RNS.RequestReceipt.DELIVERED:
-            if time.time() - start > config.DEFAULT_TRANSFER_TIMEOUT:
-                self._fail("Manifest request timed out")
-                return False
-            if not self._running:
-                return False
-            time.sleep(0.2)
+        RNS.log(
+            f"Manifest request sent (status: {receipt.status})",
+            RNS.LOG_DEBUG
+        )
 
-        if receipt.get_status() == RNS.RequestReceipt.READY:
-            response_data = receipt.get_response()
-            try:
-                manifest = umsgpack.unpackb(response_data)
+        # Wait for response via callback
+        if not response_event.wait(config.DEFAULT_TRANSFER_TIMEOUT):
+            self._fail("Manifest request timed out")
+            return False
 
-                self.ghost = GhostFile()
-                self.ghost.version = manifest.get("ghost_version", 1)
-                self.ghost.name = manifest.get("name", "unknown")
-                self.ghost.file_size = manifest.get("file_size", 0)
-                self.ghost.chunk_size = manifest.get("chunk_size",
-                                                     config.DEFAULT_CHUNK_SIZE)
-                self.ghost.chunk_count = manifest.get("chunk_count", 0)
-                self.ghost.file_hash = manifest.get("file_hash", "")
-                self.ghost.chunk_hashes = manifest.get("chunk_hashes", [])
-                self.ghost.created_at = manifest.get("created_at", 0)
-                self.ghost.created_by = manifest.get("created_by", "")
-                self.ghost.comment = manifest.get("comment", "")
+        if response_failed[0] or response_data[0] is None:
+            self._fail("Manifest request failed — seeder did not respond")
+            return False
 
-                self.total_chunks = self.ghost.chunk_count
-                self.chunker = Chunker(self.ghost)
+        try:
+            manifest = umsgpack.unpackb(response_data[0])
 
-                # Save the ghost file locally
-                self.ghost.save()
+            self.ghost = GhostFile()
+            self.ghost.version = manifest.get("ghost_version", 1)
+            self.ghost.name = manifest.get("name", "unknown")
+            self.ghost.file_size = manifest.get("file_size", 0)
+            self.ghost.chunk_size = manifest.get("chunk_size",
+                                                  config.DEFAULT_CHUNK_SIZE)
+            self.ghost.chunk_count = manifest.get("chunk_count", 0)
+            self.ghost.file_hash = manifest.get("file_hash", "")
+            self.ghost.chunk_hashes = manifest.get("chunk_hashes", [])
+            self.ghost.created_at = manifest.get("created_at", 0)
+            self.ghost.created_by = manifest.get("created_by", "")
+            self.ghost.comment = manifest.get("comment", "")
 
-                RNS.log(
-                    f"Manifest received: {self.ghost.name} "
-                    f"({self.ghost.chunk_count} chunks, "
-                    f"{GhostFile._human_size(self.ghost.file_size)})",
-                    RNS.LOG_INFO
-                )
-                return True
+            self.total_chunks = self.ghost.chunk_count
+            self.chunker = Chunker(self.ghost)
 
-            except Exception as e:
-                self._fail(f"Failed to parse manifest: {e}")
-                return False
-        else:
-            self._fail("Manifest request failed")
+            # Save the ghost file locally
+            self.ghost.save()
+
+            RNS.log(
+                f"Manifest received: {self.ghost.name} "
+                f"({self.ghost.chunk_count} chunks, "
+                f"{GhostFile._human_size(self.ghost.file_size)})",
+                RNS.LOG_INFO
+            )
+            return True
+
+        except Exception as e:
+            self._fail(f"Failed to parse manifest: {e}")
             return False
 
     def _download_chunks(self, link):
@@ -487,14 +511,31 @@ class Leecher:
         Returns:
             True if chunk downloaded and verified successfully.
         """
+        response_event = threading.Event()
+        response_data = [None]
+        response_failed = [False]
+
+        def on_response(receipt):
+            try:
+                response_data[0] = receipt.response
+            except Exception as e:
+                RNS.log(f"Error reading chunk response: {e}", RNS.LOG_ERROR)
+                response_failed[0] = True
+            response_event.set()
+
+        def on_failed(receipt):
+            RNS.log(f"Chunk {chunk_index} request failed", RNS.LOG_ERROR)
+            response_failed[0] = True
+            response_event.set()
+
         # Request the chunk
         request_data = umsgpack.packb(chunk_index)
 
         receipt = link.request(
             "chunk",
             data=request_data,
-            response_callback=None,
-            failed_callback=None,
+            response_callback=on_response,
+            failed_callback=on_failed,
             timeout=config.DEFAULT_TRANSFER_TIMEOUT
         )
 
@@ -503,70 +544,58 @@ class Leecher:
                     RNS.LOG_ERROR)
             return False
 
-        # Wait for response
-        start = time.time()
-        while receipt.get_status() == RNS.RequestReceipt.SENT or \
-              receipt.get_status() == RNS.RequestReceipt.DELIVERED:
-            if time.time() - start > config.DEFAULT_TRANSFER_TIMEOUT:
-                RNS.log(f"Chunk {chunk_index} request timed out",
-                        RNS.LOG_ERROR)
+        # Wait for response via callback
+        if not response_event.wait(config.DEFAULT_TRANSFER_TIMEOUT):
+            RNS.log(f"Chunk {chunk_index} request timed out", RNS.LOG_ERROR)
+            return False
+
+        if response_failed[0] or response_data[0] is None:
+            RNS.log(f"Chunk {chunk_index} response failed", RNS.LOG_ERROR)
+            return False
+
+        try:
+            chunk_response = umsgpack.unpackb(response_data[0])
+            index = chunk_response["index"]
+            data = chunk_response["data"]
+
+            if index != chunk_index:
+                RNS.log(
+                    f"Chunk index mismatch: requested {chunk_index}, "
+                    f"got {index}",
+                    RNS.LOG_ERROR
+                )
                 return False
-            if not self._running:
+
+            # Save and verify
+            if self.chunker.save_chunk(chunk_index, data):
+                self.chunks_received += 1
+                self.bytes_received += len(data)
+
+                RNS.log(
+                    f"Chunk {chunk_index + 1}/{self.total_chunks} "
+                    f"received ({len(data)} bytes) "
+                    f"[{self.progress * 100:.1f}%]",
+                    RNS.LOG_DEBUG
+                )
+
+                # Notify progress callback
+                if self.on_progress:
+                    try:
+                        self.on_progress(
+                            self.chunks_received,
+                            self.total_chunks,
+                            self.bytes_received
+                        )
+                    except Exception:
+                        pass
+
+                return True
+            else:
                 return False
-            time.sleep(0.1)
 
-        if receipt.get_status() == RNS.RequestReceipt.READY:
-            response_data = receipt.get_response()
-            try:
-                chunk_response = umsgpack.unpackb(response_data)
-                index = chunk_response["index"]
-                data = chunk_response["data"]
-
-                if index != chunk_index:
-                    RNS.log(
-                        f"Chunk index mismatch: requested {chunk_index}, "
-                        f"got {index}",
-                        RNS.LOG_ERROR
-                    )
-                    return False
-
-                # Save and verify
-                if self.chunker.save_chunk(chunk_index, data):
-                    self.chunks_received += 1
-                    self.bytes_received += len(data)
-
-                    RNS.log(
-                        f"Chunk {chunk_index + 1}/{self.total_chunks} "
-                        f"received ({len(data)} bytes) "
-                        f"[{self.progress * 100:.1f}%]",
-                        RNS.LOG_DEBUG
-                    )
-
-                    # Notify progress callback
-                    if self.on_progress:
-                        try:
-                            self.on_progress(
-                                self.chunks_received,
-                                self.total_chunks,
-                                self.bytes_received
-                            )
-                        except Exception:
-                            pass
-
-                    return True
-                else:
-                    return False
-
-            except Exception as e:
-                RNS.log(f"Failed to parse chunk response: {e}",
-                        RNS.LOG_ERROR)
-                return False
-        else:
-            RNS.log(
-                f"Chunk {chunk_index} request failed "
-                f"(status: {receipt.get_status()})",
-                RNS.LOG_ERROR
-            )
+        except Exception as e:
+            RNS.log(f"Failed to parse chunk response: {e}",
+                    RNS.LOG_ERROR)
             return False
 
     def cancel(self):
