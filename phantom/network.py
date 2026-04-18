@@ -127,6 +127,41 @@ class PhantomNetwork:
             "transport_enabled": RNS.Reticulum.transport_enabled(),
         }
 
+    def get_interfaces(self):
+        """
+        Get a list of active Reticulum interfaces.
+
+        Returns:
+            List of dicts with interface info.
+        """
+        interfaces = []
+        try:
+            for iface in RNS.Transport.interfaces:
+                info = {
+                    "name": getattr(iface, "name", "Unknown"),
+                    "type": type(iface).__name__,
+                    "online": getattr(iface, "online", False),
+                }
+
+                # Try to get additional details
+                if hasattr(iface, "target_host"):
+                    info["details"] = f"{iface.target_host}:{getattr(iface, 'target_port', '?')}"
+                elif hasattr(iface, "listen_ip"):
+                    info["details"] = f"{iface.listen_ip}:{getattr(iface, 'listen_port', '?')}"
+                elif hasattr(iface, "port"):
+                    info["details"] = str(iface.port)
+                else:
+                    info["details"] = ""
+
+                # Traffic stats if available
+                info["rxb"] = getattr(iface, "rxb", 0)
+                info["txb"] = getattr(iface, "txb", 0)
+
+                interfaces.append(info)
+        except Exception:
+            pass
+        return interfaces
+
     def _ensure_sideband_hub(self):
         """
         Ensure the Sideband Hub interface is in the Reticulum config.

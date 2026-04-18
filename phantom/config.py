@@ -86,6 +86,7 @@ DOWNLOADS_DIR = os.path.join(DATA_DIR, "downloads")
 CHUNKS_DIR = os.path.join(DATA_DIR, "chunks")
 GHOSTS_DIR = os.path.join(DATA_DIR, "ghosts")
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+LOG_FILE = os.path.join(DATA_DIR, "phantom.log")
 
 
 def ensure_directories():

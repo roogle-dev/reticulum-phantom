@@ -278,6 +278,33 @@ class PhantomTUI(App):
         color: $text-muted;
         margin: 2;
     }
+
+    #settings-edit-bar {
+        layout: horizontal;
+        height: 3;
+        margin: 1 1 0 1;
+        padding: 0;
+    }
+
+    #settings-edit-bar Input {
+        width: 1fr;
+        margin: 0 1 0 0;
+    }
+
+    #settings-edit-bar Button {
+        width: auto;
+        min-width: 10;
+    }
+
+    #interfaces-label {
+        margin: 1 1 0 1;
+    }
+
+    #interfaces-table {
+        height: auto;
+        max-height: 12;
+        margin: 0 1 1 1;
+    }
     """
 
     BINDINGS = [
@@ -370,6 +397,24 @@ class PhantomTUI(App):
                 )
                 yield DataTable(id="settings-table", zebra_stripes=True)
 
+                with Horizontal(id="settings-edit-bar"):
+                    yield Input(
+                        placeholder="Setting name (e.g. download_directory)",
+                        id="settings-key-input",
+                    )
+                    yield Input(
+                        placeholder="New value",
+                        id="settings-value-input",
+                    )
+                    yield Button("Save", id="btn-save-setting", variant="success")
+
+                yield Static(
+                    " [bold]📡 Reticulum Interfaces[/bold]  "
+                    "[dim]Active network interfaces[/dim]",
+                    id="interfaces-label",
+                )
+                yield DataTable(id="interfaces-table", zebra_stripes=True)
+
         yield Footer()
 
     def on_mount(self) -> None:
@@ -386,9 +431,16 @@ class PhantomTUI(App):
         self._init_peers_table()
         self._init_network_table()
         self._init_settings_table()
+        self._init_interfaces_table()
+
+        # Load log history from previous sessions
+        self._load_log_history()
 
         # Auto-seed files from ghost library
         self._auto_seed_library()
+
+        # Auto-resume interrupted downloads
+        self._auto_resume_downloads()
 
         # Initial refresh
         self._refresh_ui()
@@ -444,6 +496,62 @@ class PhantomTUI(App):
         except Exception:
             pass
 
+    def _load_log_history(self):
+        """Load log entries from previous sessions."""
+        try:
+            entries = self.engine.load_log_history(max_lines=100)
+            if entries:
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "info",
+                    "message": f"─── Previous session logs ({len(entries)} entries) ───"
+                })
+                for entry in entries[-50:]:
+                    date = entry.get("date", "")
+                    time_str = entry.get("time", "")
+                    prefix = f"{date} " if date else ""
+                    entry_copy = dict(entry)
+                    entry_copy["time"] = prefix + time_str
+                    self._append_log(entry_copy)
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "info",
+                    "message": "─── Current session ───"
+                })
+        except Exception:
+            pass
+
+    def _auto_resume_downloads(self):
+        """Resume any interrupted downloads from previous sessions."""
+        try:
+            resumable = self.engine.get_resumable_downloads()
+            for dl in resumable:
+                ghost_path = dl.get("ghost_path", "")
+                name = dl.get("name", "Unknown")
+                have = dl.get("chunks_have", 0)
+                total = dl.get("total_chunks", 0)
+                pct = (have / total * 100) if total > 0 else 0
+
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "info",
+                    "message": f"🔄 Resuming: {name} ({pct:.0f}% — {have}/{total} chunks)"
+                })
+
+                self.run_worker(
+                    lambda gp=ghost_path: self.engine.download_file(gp),
+                    thread=True,
+                )
+
+            if resumable:
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "info",
+                    "message": f"Resumed {len(resumable)} interrupted download(s)"
+                })
+        except Exception:
+            pass
+
     def _on_engine_log(self, entry):
         """Handle log events from the engine."""
         try:
@@ -488,6 +596,7 @@ class PhantomTUI(App):
             self._refresh_transfers()
             self._refresh_peers_table()
             self._refresh_network_table()
+            self._refresh_interfaces_table()
         except Exception:
             pass
 
@@ -723,6 +832,15 @@ class PhantomTUI(App):
         try:
             table = self.query_one("#settings-table", DataTable)
             table.add_columns("Setting", "Value", "Default")
+            self._refresh_settings_table()
+        except Exception:
+            pass
+
+    def _refresh_settings_table(self):
+        """Refresh settings table data."""
+        try:
+            table = self.query_one("#settings-table", DataTable)
+            table.clear()
 
             settings = config.load_settings()
             defaults = config.DEFAULT_SETTINGS
@@ -730,6 +848,37 @@ class PhantomTUI(App):
             for key, value in sorted(settings.items()):
                 default = defaults.get(key, "")
                 table.add_row(key, str(value), str(default))
+        except Exception:
+            pass
+
+    def _init_interfaces_table(self):
+        """Initialize the Reticulum interfaces table."""
+        try:
+            table = self.query_one("#interfaces-table", DataTable)
+            table.add_columns("Name", "Type", "Status", "Details", "RX", "TX")
+        except Exception:
+            pass
+
+    def _refresh_interfaces_table(self):
+        """Refresh interfaces table with live data."""
+        try:
+            table = self.query_one("#interfaces-table", DataTable)
+            table.clear()
+
+            interfaces = self.engine.get_interfaces()
+            for iface in interfaces:
+                status = "[green]● Online[/green]" if iface.get("online") else "[red]● Offline[/red]"
+                rx = GhostFile._human_size(iface.get("rxb", 0))
+                tx = GhostFile._human_size(iface.get("txb", 0))
+
+                table.add_row(
+                    iface.get("name", "Unknown"),
+                    iface.get("type", "Unknown"),
+                    status,
+                    iface.get("details", ""),
+                    rx,
+                    tx,
+                )
         except Exception:
             pass
 
@@ -759,6 +908,11 @@ class PhantomTUI(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button clicks."""
+        # Handle settings save button separately
+        if event.button.id == "btn-save-setting":
+            self._save_setting()
+            return
+
         inp = self.query_one("#action-input", Input)
         value = inp.value.strip()
 
@@ -830,6 +984,57 @@ class PhantomTUI(App):
                 lambda: self.engine.stop_transfer(transfer_id),
                 thread=True,
             )
+
+    def _save_setting(self):
+        """Save a setting from the settings edit bar."""
+        try:
+            key_input = self.query_one("#settings-key-input", Input)
+            val_input = self.query_one("#settings-value-input", Input)
+
+            key = key_input.value.strip()
+            value = val_input.value.strip()
+
+            if not key or not value:
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "warning",
+                    "message": "Both setting name and value are required"
+                })
+                return
+
+            # Parse value (int, float, bool, or string)
+            parsed = value
+            if value.lower() == "true":
+                parsed = True
+            elif value.lower() == "false":
+                parsed = False
+            else:
+                try:
+                    parsed = int(value)
+                except ValueError:
+                    try:
+                        parsed = float(value)
+                    except ValueError:
+                        pass
+
+            try:
+                config.update_setting(key, parsed)
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "info",
+                    "message": f"✓ Setting '{key}' updated to: {parsed}"
+                })
+                self._refresh_settings_table()
+                key_input.value = ""
+                val_input.value = ""
+            except KeyError as e:
+                self._append_log({
+                    "time": time.strftime("%H:%M:%S"),
+                    "level": "error",
+                    "message": f"Unknown setting: {key}"
+                })
+        except Exception:
+            pass
 
     def on_unmount(self) -> None:
         """Clean up on exit."""

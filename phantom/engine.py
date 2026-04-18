@@ -10,6 +10,7 @@ decoupled from any UI framework.
 """
 
 import os
+import json
 import time
 import threading
 from collections import deque
@@ -251,10 +252,17 @@ class PhantomEngine:
                 transfer.name = leecher.ghost.name
                 transfer.total_chunks = leecher.total_chunks
                 transfer.ghost_hash = leecher.ghost_hash
+                # Save download state for resume
+                self._save_download_state(
+                    leecher.ghost_hash, destination_hash
+                )
             elif state == "complete":
                 transfer.progress = 1.0
                 self._add_log("info",
                               f"✓ Download complete: {transfer.name}")
+                # Clear download state — no longer resumable
+                if transfer.ghost_hash:
+                    self._clear_download_state(transfer.ghost_hash)
             elif state == "failed":
                 transfer.error = info
                 self._add_log("error",
@@ -508,20 +516,154 @@ class PhantomEngine:
             self._notify_transfer(transfer_id)
 
     def _add_log(self, level, message):
-        """Add a log entry."""
+        """Add a log entry and persist to disk."""
         entry = {
             "time": datetime.now().strftime("%H:%M:%S"),
+            "date": datetime.now().strftime("%Y-%m-%d"),
             "level": level,
             "message": message,
         }
         with self._lock:
             self._log.append(entry)
 
+        # Persist to log file
+        try:
+            config.ensure_directories()
+            with open(config.LOG_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+        except Exception:
+            pass
+
         if self.on_log:
             try:
                 self.on_log(entry)
             except Exception:
                 pass
+
+    def load_log_history(self, max_lines=200):
+        """
+        Load recent log entries from the persistent log file.
+
+        Returns:
+            List of log entry dicts.
+        """
+        entries = []
+        try:
+            if os.path.isfile(config.LOG_FILE):
+                with open(config.LOG_FILE, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                for line in lines[-max_lines:]:
+                    try:
+                        entries.append(json.loads(line.strip()))
+                    except json.JSONDecodeError:
+                        pass
+        except Exception:
+            pass
+        return entries
+
+    # ─── Download State Persistence ────────────────────────────────────────
+
+    def _save_download_state(self, ghost_hash, target):
+        """Save download state so it can be resumed after restart."""
+        try:
+            state_dir = os.path.join(config.CHUNKS_DIR, ghost_hash)
+            os.makedirs(state_dir, exist_ok=True)
+            state_file = os.path.join(state_dir, "_download_state.json")
+            state = {
+                "ghost_hash": ghost_hash,
+                "target": target,
+                "started_at": time.time(),
+            }
+            # Find the .ghost file path in the library
+            ghost_path = os.path.join(
+                config.GHOSTS_DIR,
+                ghost_hash  # We'll match by scanning
+            )
+            # Scan ghosts dir for matching ghost_hash
+            for fname in os.listdir(config.GHOSTS_DIR):
+                if fname.endswith(config.GHOST_EXTENSION):
+                    fpath = os.path.join(config.GHOSTS_DIR, fname)
+                    ghost = GhostFile.load(fpath)
+                    if ghost and ghost.ghost_hash == ghost_hash:
+                        state["ghost_path"] = fpath
+                        state["name"] = ghost.name
+                        state["total_chunks"] = ghost.chunk_count
+                        break
+
+            with open(state_file, "w") as f:
+                json.dump(state, f, indent=2)
+        except Exception:
+            pass
+
+    def _clear_download_state(self, ghost_hash):
+        """Remove download state after completion."""
+        try:
+            state_file = os.path.join(
+                config.CHUNKS_DIR, ghost_hash, "_download_state.json"
+            )
+            if os.path.isfile(state_file):
+                os.remove(state_file)
+        except Exception:
+            pass
+
+    def get_resumable_downloads(self):
+        """
+        Scan chunk directories for incomplete downloads that can be resumed.
+
+        Returns:
+            List of dicts with {ghost_hash, ghost_path, name, chunks_have, total_chunks}.
+        """
+        resumable = []
+        try:
+            config.ensure_directories()
+            if not os.path.isdir(config.CHUNKS_DIR):
+                return resumable
+
+            for entry in os.listdir(config.CHUNKS_DIR):
+                state_dir = os.path.join(config.CHUNKS_DIR, entry)
+                if not os.path.isdir(state_dir):
+                    continue
+                state_file = os.path.join(state_dir, "_download_state.json")
+                if not os.path.isfile(state_file):
+                    continue
+
+                try:
+                    with open(state_file, "r") as f:
+                        state = json.load(f)
+
+                    ghost_path = state.get("ghost_path", "")
+                    if not ghost_path or not os.path.isfile(ghost_path):
+                        continue
+
+                    # Count chunks we already have
+                    chunks_have = sum(
+                        1 for f in os.listdir(state_dir)
+                        if f.startswith("chunk_")
+                    )
+                    total = state.get("total_chunks", 0)
+
+                    if chunks_have > 0 and chunks_have < total:
+                        resumable.append({
+                            "ghost_hash": state.get("ghost_hash", entry),
+                            "ghost_path": ghost_path,
+                            "name": state.get("name", "Unknown"),
+                            "chunks_have": chunks_have,
+                            "total_chunks": total,
+                            "target": state.get("target", ""),
+                        })
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return resumable
+
+    # ─── Reticulum Interfaces ──────────────────────────────────────────────
+
+    def get_interfaces(self):
+        """Get list of active Reticulum interfaces."""
+        if self._network:
+            return self._network.get_interfaces()
+        return []
 
     def _notify_transfer(self, transfer_id):
         """Notify that a transfer has updated."""
