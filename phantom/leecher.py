@@ -776,6 +776,26 @@ class Leecher:
             except Exception:
                 pass
 
+    def _expire_stale_path(self, destination_hash):
+        """Remove a stale path from RNS path table.
+
+        RNS.Transport.await_path() returns True immediately if the
+        destination is in path_table — regardless of staleness.
+        mark_path_unknown_state() only sets a flag, it does NOT
+        remove from path_table. We must delete it directly.
+        """
+        try:
+            with RNS.Transport.path_table_lock:
+                if destination_hash in RNS.Transport.path_table:
+                    del RNS.Transport.path_table[destination_hash]
+                    RNS.log(
+                        f"Expired stale path for "
+                        f"{RNS.prettyhexrep(destination_hash)}",
+                        RNS.LOG_DEBUG
+                    )
+        except Exception as e:
+            RNS.log(f"Could not expire path: {e}", RNS.LOG_DEBUG)
+
     def _connect_to_seeder(self, destination_hash):
         """
         Establish an encrypted link to the seeder.
@@ -857,11 +877,9 @@ class Leecher:
                     "Link to seeder failed — connection rejected or dropped",
                     RNS.LOG_WARNING
                 )
-                # Invalidate stale cached path so next discovery checks network
-                try:
-                    RNS.Transport.mark_path_unknown_state(destination_hash)
-                except Exception:
-                    pass
+                # Remove stale path from table so next await_path actually
+                # checks the network instead of returning cached True
+                self._expire_stale_path(destination_hash)
                 return None
             time.sleep(0.5)
 
@@ -870,10 +888,7 @@ class Leecher:
             "Link establishment timed out — seeder unreachable",
             RNS.LOG_WARNING
         )
-        try:
-            RNS.Transport.mark_path_unknown_state(destination_hash)
-        except Exception:
-            pass
+        self._expire_stale_path(destination_hash)
         return None
 
     def _fetch_manifest(self, link):
