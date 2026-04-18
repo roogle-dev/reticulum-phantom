@@ -74,13 +74,26 @@ class WantAnnounceHandler:
         self.aspect_filter = None
 
     def received_announce(self, destination_hash, announced_identity, app_data):
-        """Called by RNS when a 'want' announcement is received."""
+        """Called by RNS when ANY announcement is received."""
+        # Debug: log ALL announces we receive
+        RNS.log(
+            f"[DEBUG] Announce received from {destination_hash.hex()[:16]}... "
+            f"app_data={'yes' if app_data else 'no'} "
+            f"({len(app_data) if app_data else 0} bytes)",
+            RNS.LOG_INFO
+        )
+
         if not app_data:
             return
 
         try:
             metadata = umsgpack.unpackb(app_data)
             wanted_hash = metadata.get("ghost_hash", "")
+
+            RNS.log(
+                f"[DEBUG] Parsed ghost_hash: {wanted_hash[:16] if wanted_hash else 'none'}",
+                RNS.LOG_DEBUG
+            )
 
             with self._lock:
                 seeder = self._seeders.get(wanted_hash)
@@ -228,19 +241,53 @@ class Seeder:
             RNS.LOG_INFO
         )
 
-        # One-time announce so the mesh can route link requests to us.
-        # No periodic re-announces — discovery is driven by leecher wants.
+        # Initial announce so the mesh can route link requests to us
         if announce_delay > 0:
             time.sleep(announce_delay)
 
-        self._destination.announce(app_data=umsgpack.packb({
+        self._announce_data = umsgpack.packb({
             "ghost_hash": self.ghost.ghost_hash,
-        }))
+        })
+        self._destination.announce(app_data=self._announce_data)
 
         # Register with the global want-announce handler
+        # (works on platforms with rnsd, e.g. Ubuntu)
         WantAnnounceHandler.register_seeder(
             self.ghost.ghost_hash, self
         )
+
+        # Start infrequent re-announce loop (every 3h default)
+        # Needed because announce handlers don't fire on all platforms
+        self._announce_thread = threading.Thread(
+            target=self._announce_loop, daemon=True
+        )
+        self._announce_thread.start()
+
+    def _announce_loop(self):
+        """Infrequent re-announce loop so leechers can discover us.
+
+        The initial announce happens in start(). This loop handles
+        periodic heartbeat re-announces (every 3h by default).
+        """
+        interval = config.DEFAULT_ANNOUNCE_INTERVAL
+        # Sleep in 1s increments so we can stop quickly
+        elapsed = 0
+        while self._running:
+            time.sleep(1)
+            elapsed += 1
+            if elapsed >= interval:
+                elapsed = 0
+                if self._running and self._destination:
+                    try:
+                        self._destination.announce(
+                            app_data=self._announce_data
+                        )
+                        RNS.log(
+                            f"Re-announced: {self.ghost.name}",
+                            RNS.LOG_DEBUG
+                        )
+                    except Exception:
+                        pass
 
     def stop(self):
         """Stop seeding and tear down all links."""

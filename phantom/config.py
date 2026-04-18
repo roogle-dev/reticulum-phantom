@@ -27,7 +27,7 @@ DEFAULT_CHUNK_SIZE = 1_048_576    # 1 MB
 MIN_CHUNK_SIZE = 65_536           # 64 KB
 MAX_CHUNK_SIZE = 16_777_216       # 16 MB
 
-DEFAULT_ANNOUNCE_INTERVAL = 1800  # seconds (legacy — seeders no longer announce)
+DEFAULT_ANNOUNCE_INTERVAL = 30     # TESTING: 30s (change to 10800 for production = 3h)
 ANNOUNCE_STAGGER_PER_FILE = 2     # seconds between each file's initial announce in seed-all
 DEFAULT_TRANSFER_TIMEOUT = 120    # seconds (for data transfers)
 DEFAULT_LINK_TIMEOUT = 10         # seconds (for link establishment — fast failover)
@@ -37,7 +37,6 @@ MAX_SWARM_PEERS = 5               # max simultaneous peer connections
 
 # Reverse discovery: leecher announces "I want X", seeders respond
 WANT_ANNOUNCE_INTERVAL = 30       # seconds between want re-announces
-WANT_RESPONSE_TIMEOUT = 120       # max seconds to wait for seeder response
 
 # TCP/IP defaults for initial transport
 DEFAULT_TCP_HOST = "0.0.0.0"
