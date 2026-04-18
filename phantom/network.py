@@ -153,9 +153,12 @@ class PhantomNetwork:
 
             # Check if Sideband Hub already configured
             if "sideband.connect.reticulum.network" in content.lower():
+                # Still check if AutoInterface needs disabling
+                self._disable_autointerface(config_file, content)
                 return  # Already configured
 
             if "sideband hub" in content.lower():
+                self._disable_autointerface(config_file, content)
                 return  # Already has a sideband section
 
             # Append Sideband Hub interface
@@ -175,9 +178,41 @@ class PhantomNetwork:
                 RNS.LOG_INFO
             )
 
+            # Disable AutoInterface to prevent IPv6 errors
+            with open(config_file, "r") as f:
+                content = f.read()
+            self._disable_autointerface(config_file, content)
+
         except Exception as e:
             # Non-fatal — user can still configure manually
             RNS.log(
                 f"Could not auto-configure Sideband Hub: {e}",
                 RNS.LOG_DEBUG
             )
+
+    @staticmethod
+    def _disable_autointerface(config_file, content):
+        """
+        Disable AutoInterface to prevent IPv6 'label too long' errors
+        on Windows. Sideband Hub provides global mesh connectivity.
+        """
+        try:
+            # Check if AutoInterface is enabled
+            if "[[Default Interface]]" in content:
+                import re
+                # Find the Default Interface block and disable it
+                new_content = re.sub(
+                    r'(\[\[Default Interface\]\].*?enabled\s*=\s*)Yes',
+                    r'\1No',
+                    content,
+                    flags=re.DOTALL | re.IGNORECASE
+                )
+                if new_content != content:
+                    with open(config_file, "w") as f:
+                        f.write(new_content)
+                    RNS.log(
+                        "Disabled AutoInterface (using Sideband Hub instead)",
+                        RNS.LOG_INFO
+                    )
+        except Exception:
+            pass

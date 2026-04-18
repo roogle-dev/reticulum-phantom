@@ -300,6 +300,8 @@ class Leecher:
         pulls chunks from the queue. If a peer dies, its remaining
         chunks go back to the queue for other peers.
 
+        New seeders discovered during download are automatically added.
+
         Returns:
             True if all chunks downloaded successfully.
         """
@@ -324,11 +326,15 @@ class Leecher:
         for idx in missing:
             chunk_queue.put(idx)
 
-        # Track peer stats
+        # Track peer stats and active workers
         peer_stats = {}
         stats_lock = threading.Lock()
         all_done = threading.Event()
-        swarm_error = [False]
+        active_peer_ids = set()  # Track connected peer dest hashes
+        workers = []
+
+        for dh, _ in active_links:
+            active_peer_ids.add(dh)
 
         def peer_worker(dest_hash, link, peer_id):
             """Worker thread for one peer — pulls chunks from shared queue."""
@@ -363,9 +369,8 @@ class Leecher:
                         f"reassigning to another peer",
                         RNS.LOG_WARNING
                     )
-                    # Add to failed dests so we don't retry this peer
                     failed_dests.add(dest_hash)
-                    break  # This peer is dead, stop worker
+                    break
 
             RNS.log(
                 f"Peer {peer_hex}... finished: "
@@ -373,8 +378,70 @@ class Leecher:
                 RNS.LOG_INFO
             )
 
+        def discovery_watcher():
+            """Background thread: watch for new seeders and add them."""
+            class LiveAnnounceHandler:
+                def __init__(self, target_hash):
+                    self.aspect_filter = None
+                    self._target = target_hash
+
+                def received_announce(self, destination_hash, announced_identity, app_data):
+                    if all_done.is_set():
+                        return
+                    if app_data:
+                        try:
+                            metadata = umsgpack.unpackb(app_data)
+                            gh = metadata.get("ghost_hash", "")
+                            if gh == self._target:
+                                if destination_hash not in active_peer_ids:
+                                    # New seeder! Connect and add to swarm
+                                    RNS.log(
+                                        f"New seeder discovered during download: "
+                                        f"{RNS.prettyhexrep(destination_hash)}",
+                                        RNS.LOG_INFO
+                                    )
+                                    # Request path then connect
+                                    if not RNS.Transport.has_path(destination_hash):
+                                        RNS.Transport.request_path(destination_hash)
+                                    # Wait for path
+                                    deadline = time.time() + 10
+                                    while not RNS.Transport.has_path(destination_hash):
+                                        if time.time() > deadline or all_done.is_set():
+                                            return
+                                        time.sleep(0.5)
+
+                                    link = self._outer._connect_to_seeder(destination_hash)
+                                    if link:
+                                        active_peer_ids.add(destination_hash)
+                                        peer_id = len(workers)
+                                        t = threading.Thread(
+                                            target=peer_worker,
+                                            args=(destination_hash, link, peer_id),
+                                            daemon=True
+                                        )
+                                        workers.append(t)
+                                        t.start()
+                                        RNS.log(
+                                            f"New peer joined swarm! "
+                                            f"Now {len(active_peer_ids)} peer(s)",
+                                            RNS.LOG_INFO
+                                        )
+                        except Exception:
+                            pass
+
+            handler = LiveAnnounceHandler(self.ghost_hash)
+            handler._outer = self
+            RNS.Transport.register_announce_handler(handler)
+
+            # Keep watching until download completes
+            while not all_done.is_set() and self._running:
+                time.sleep(1)
+
+        # Start discovery watcher in background
+        watcher = threading.Thread(target=discovery_watcher, daemon=True)
+        watcher.start()
+
         # Start worker threads — one per peer
-        workers = []
         for i, (dh, lk) in enumerate(active_links):
             t = threading.Thread(
                 target=peer_worker,
@@ -384,9 +451,25 @@ class Leecher:
             workers.append(t)
             t.start()
 
-        # Wait for all workers to finish
-        for t in workers:
-            t.join()
+        # Wait for all workers to finish (including dynamically added ones)
+        while not all_done.is_set() and self._running:
+            # Check if any workers are still alive
+            alive = any(t.is_alive() for t in workers)
+            if not alive and not chunk_queue.empty():
+                # All workers dead but chunks remain — need more peers
+                RNS.log(
+                    f"All peers disconnected, {chunk_queue.qsize()} "
+                    f"chunks remaining — waiting for new peers...",
+                    RNS.LOG_WARNING
+                )
+                time.sleep(5)
+                if not any(t.is_alive() for t in workers):
+                    break  # No more workers, give up this round
+            elif not alive:
+                break  # All done
+            time.sleep(1)
+
+        all_done.set()  # Signal discovery watcher to stop
 
         # Check if we got everything
         if self.chunks_received >= self.total_chunks:
