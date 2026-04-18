@@ -310,6 +310,41 @@ class PhantomEngine:
             if os.path.isfile(ghost_path):
                 ghost = GhostFile.load(ghost_path)
                 if ghost:
+                    # Check if already downloading this ghost_hash
+                    with self._lock:
+                        for existing_tid, existing_t in self._transfers.items():
+                            if (existing_t.ghost_hash == ghost.ghost_hash
+                                    and existing_t.direction == "download"
+                                    and existing_t.state not in (
+                                        "complete", "failed",
+                                        "cancelled", "stopped"
+                                    )
+                                    and existing_tid != tid):
+                                self._add_log("info",
+                                              f"Already downloading: {ghost.name}")
+                                # Remove the new empty transfer
+                                self._transfers.pop(tid, None)
+                                return existing_tid
+
+                    # Check if file already exists in downloads
+                    existing_file = os.path.join(
+                        config.DOWNLOADS_DIR, ghost.name
+                    )
+                    if os.path.isfile(existing_file):
+                        file_size = os.path.getsize(existing_file)
+                        if file_size == ghost.file_size:
+                            self._add_log("info",
+                                          f"✓ Already downloaded: {ghost.name} "
+                                          f"({GhostFile._human_size(file_size)})")
+                            transfer.name = ghost.name
+                            transfer.ghost_hash = ghost.ghost_hash
+                            transfer.progress = 1.0
+                            transfer.state = "complete"
+                            transfer.total_chunks = ghost.chunk_count
+                            transfer.chunks_done = ghost.chunk_count
+                            self._notify_transfer(tid)
+                            return tid
+
                     transfer.name = ghost.name
                     transfer.ghost_hash = ghost.ghost_hash
                     transfer.total_chunks = ghost.chunk_count
