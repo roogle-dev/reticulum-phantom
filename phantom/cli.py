@@ -638,10 +638,10 @@ def cmd_download(args):
     task_id = None
 
     def on_progress(chunks_done, total, bytes_received):
-        nonlocal task_id
-        if task_id is not None:
-            progress.update(task_id, completed=bytes_received,
-                           description=f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [{chunks_done}/{total}]")
+        # Progress is handled by the main loop below — this callback
+        # is only used by the TUI. Don't update the CLI progress bar here
+        # as it would conflict with the chunk-based progress calculation.
+        pass
 
     def on_state_change(state, info):
         nonlocal task_id
