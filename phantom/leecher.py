@@ -151,75 +151,143 @@ class Leecher:
         return True
 
     def _download_worker(self):
-        """Main download worker thread."""
-        try:
-            # Step 1: Discover the seeder
-            self._set_state(self.STATE_DISCOVERING)
-            destination_hash = self._discover_seeder()
-            if not destination_hash:
+        """Main download worker thread with seeder failover."""
+        failed_dests = set()  # Track failed seeder dest hashes
+        max_retries = 10
+
+        for attempt in range(max_retries):
+            if not self._running:
                 return
 
-            # Step 2: Connect to the seeder
-            self._set_state(self.STATE_CONNECTING)
-            link = self._connect_to_seeder(destination_hash)
-            if not link:
-                return
-
-            # Step 3: Get manifest if we don't have it
-            if not self.ghost:
-                self._set_state(self.STATE_FETCHING_MANIFEST)
-                if not self._fetch_manifest(link):
+            try:
+                # Step 1: Discover a seeder (skipping failed ones)
+                self._set_state(self.STATE_DISCOVERING)
+                destination_hash = self._discover_seeder(
+                    failed_dests=failed_dests
+                )
+                if not destination_hash:
                     return
 
-            # Step 4: Download missing chunks
-            self._set_state(self.STATE_DOWNLOADING)
-            if not self._download_chunks(link):
-                return
+                # Step 2: Connect to the seeder
+                self._set_state(self.STATE_CONNECTING)
+                link = self._connect_to_seeder(destination_hash)
+                if not link:
+                    # Connection failed — blacklist this seeder and retry
+                    failed_dests.add(destination_hash)
+                    dest_hex = destination_hash.hex()
+                    RNS.log(
+                        f"Seeder {dest_hex[:16]}... failed, "
+                        f"searching for another seeder...",
+                        RNS.LOG_WARNING
+                    )
+                    # Clean up failed link
+                    if self._link:
+                        try:
+                            self._link.teardown()
+                        except Exception:
+                            pass
+                        self._link = None
+                    time.sleep(2)
+                    continue  # Retry with another seeder
 
-            # Step 5: Assemble the file
-            self._set_state(self.STATE_ASSEMBLING)
-            output = None
-            if self.output_dir:
-                os.makedirs(self.output_dir, exist_ok=True)
-                output = os.path.join(self.output_dir, self.ghost.name)
-            output_path = self.chunker.assemble(output)
+                # Step 3: Get manifest if we don't have it
+                if not self.ghost:
+                    self._set_state(self.STATE_FETCHING_MANIFEST)
+                    if not self._fetch_manifest(link):
+                        failed_dests.add(destination_hash)
+                        if self._link:
+                            try:
+                                self._link.teardown()
+                            except Exception:
+                                pass
+                            self._link = None
+                        time.sleep(2)
+                        continue
 
-            if output_path:
-                self.end_time = time.time()
-                self._set_state(self.STATE_COMPLETE, output_path)
-                self.chunker.cleanup()
+                # Step 4: Download missing chunks
+                self._set_state(self.STATE_DOWNLOADING)
+                if not self._download_chunks(link):
+                    # Download interrupted — try another seeder
+                    if self._running and self.chunks_received < self.total_chunks:
+                        failed_dests.add(destination_hash)
+                        RNS.log(
+                            f"Download interrupted at chunk "
+                            f"{self.chunks_received}/{self.total_chunks}, "
+                            f"trying another seeder...",
+                            RNS.LOG_WARNING
+                        )
+                        if self._link:
+                            try:
+                                self._link.teardown()
+                            except Exception:
+                                pass
+                            self._link = None
+                        time.sleep(2)
+                        continue
+                    return
 
-                if self.on_complete:
-                    self.on_complete(output_path)
+                # Step 5: Assemble the file
+                self._set_state(self.STATE_ASSEMBLING)
+                output = None
+                if self.output_dir:
+                    os.makedirs(self.output_dir, exist_ok=True)
+                    output = os.path.join(self.output_dir, self.ghost.name)
+                output_path = self.chunker.assemble(output)
 
-                RNS.log(
-                    f"Download complete: {output_path}",
-                    RNS.LOG_INFO
-                )
-            else:
-                self._fail("File assembly failed — hash mismatch")
+                if output_path:
+                    self.end_time = time.time()
+                    self._set_state(self.STATE_COMPLETE, output_path)
+                    self.chunker.cleanup()
 
-        except Exception as e:
-            self._fail(f"Download error: {e}")
-        finally:
-            # Clean up link
-            if self._link:
-                try:
-                    self._link.teardown()
-                except Exception:
-                    pass
+                    if self.on_complete:
+                        self.on_complete(output_path)
 
-    def _discover_seeder(self):
+                    RNS.log(
+                        f"Download complete: {output_path}",
+                        RNS.LOG_INFO
+                    )
+                else:
+                    self._fail("File assembly failed — hash mismatch")
+                return  # Success or assembly failure — done
+
+            except Exception as e:
+                RNS.log(f"Download attempt {attempt+1} error: {e}",
+                        RNS.LOG_ERROR)
+                if self._link:
+                    try:
+                        self._link.teardown()
+                    except Exception:
+                        pass
+                    self._link = None
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    continue
+                self._fail(f"Download error after {max_retries} attempts: {e}")
+            finally:
+                if self._state not in (self.STATE_COMPLETE, self.STATE_FAILED,
+                                       self.STATE_DISCOVERING, self.STATE_CONNECTING):
+                    if self._link:
+                        try:
+                            self._link.teardown()
+                        except Exception:
+                            pass
+
+    def _discover_seeder(self, failed_dests=None):
         """
         Find a seeder for the requested ghost_hash.
+        Skips any seeders in failed_dests set.
 
-        Uses two strategies:
-        1. Listen for announces with matching ghost_hash in app_data
+        Uses three strategies:
+        1. Use seeder_dest from ghost file (fastest)
         2. If input looks like a destination hash, try direct path request
+        3. Listen for announces with matching ghost_hash in app_data
 
         Returns:
             Destination hash as bytes, or None if not found.
         """
+        if failed_dests is None:
+            failed_dests = set()
+
         input_hash = self.ghost_hash
         found_event = threading.Event()
         found_dest = [None]  # [destination_hash_bytes]
@@ -236,6 +304,14 @@ class Leecher:
                         metadata = umsgpack.unpackb(app_data)
                         gh = metadata.get("ghost_hash", "")
                         if gh == self._target:
+                            # Skip failed seeders
+                            if destination_hash in failed_dests:
+                                RNS.log(
+                                    f"Skipping failed seeder: "
+                                    f"{RNS.prettyhexrep(destination_hash)}",
+                                    RNS.LOG_DEBUG
+                                )
+                                return
                             RNS.log(
                                 f"Found seeder via announce: {RNS.prettyhexrep(destination_hash)}",
                                 RNS.LOG_INFO
@@ -249,23 +325,36 @@ class Leecher:
         handler = GhostAnnounceHandler(input_hash)
         RNS.Transport.register_announce_handler(handler)
 
-        RNS.log(
-            f"Searching mesh for ghost {input_hash[:16]}...",
-            RNS.LOG_INFO
-        )
+        if failed_dests:
+            RNS.log(
+                f"Searching mesh for alternative seeder "
+                f"({len(failed_dests)} failed)...",
+                RNS.LOG_INFO
+            )
+        else:
+            RNS.log(
+                f"Searching mesh for ghost {input_hash[:16]}...",
+                RNS.LOG_INFO
+            )
 
         # Strategy 1: Use seeder_dest from ghost file (fastest)
         dest_hash = None
         if self.ghost and self.ghost.seeder_dest:
             try:
                 candidate = bytes.fromhex(self.ghost.seeder_dest)
-                if len(candidate) == 16:
+                if len(candidate) == 16 and candidate not in failed_dests:
                     RNS.log(
                         f"Using seeder dest from ghost file: {self.ghost.seeder_dest}",
                         RNS.LOG_INFO
                     )
                     RNS.Transport.request_path(candidate)
                     dest_hash = candidate
+                elif candidate in failed_dests:
+                    RNS.log(
+                        f"Ghost file seeder {self.ghost.seeder_dest[:16]}... "
+                        f"already failed, waiting for announce...",
+                        RNS.LOG_INFO
+                    )
             except (ValueError, Exception):
                 pass
 
@@ -273,13 +362,13 @@ class Leecher:
         if not dest_hash:
             try:
                 candidate = bytes.fromhex(input_hash)
-                if len(candidate) == 16:
+                if len(candidate) == 16 and candidate not in failed_dests:
                     RNS.log(
                         f"Input looks like destination hash, requesting path...",
                         RNS.LOG_INFO
                     )
                     RNS.Transport.request_path(candidate)
-                    dest_hash = candidate  # Always track this hash
+                    dest_hash = candidate
 
                     # Try to recover ghost_hash from cached app_data
                     app_data = RNS.Identity.recall_app_data(candidate)
@@ -293,39 +382,46 @@ class Leecher:
                                     RNS.LOG_INFO
                                 )
                                 self.ghost_hash = real_ghost
+                                # Update announce handler target
+                                handler._target = real_ghost
                         except Exception:
                             pass
+                elif candidate in failed_dests:
+                    RNS.log(
+                        f"Direct hash already failed, waiting for announce...",
+                        RNS.LOG_INFO
+                    )
             except (ValueError, Exception):
                 pass
 
         # Wait for discovery — patient retry loop
-        # Mesh routes can take minutes to propagate through relay hubs.
-        # We keep retrying until found or user cancels (Ctrl+C).
-        retry_interval = 15  # Re-request path every 15 seconds
+        retry_interval = 15
         last_request = time.time()
         attempt = 1
 
         RNS.log("Waiting for seeder (will keep retrying)...", RNS.LOG_INFO)
 
         while not found_event.is_set():
-            # Check direct path
-            if dest_hash and RNS.Transport.has_path(dest_hash):
-                hops = RNS.Transport.hops_to(dest_hash)
-                RNS.log(
-                    f"Path found via direct request! {hops} hops to seeder",
-                    RNS.LOG_INFO
-                )
-                return dest_hash
+            # Check direct path (only if not in failed list)
+            if dest_hash and dest_hash not in failed_dests:
+                if RNS.Transport.has_path(dest_hash):
+                    hops = RNS.Transport.hops_to(dest_hash)
+                    RNS.log(
+                        f"Path found via direct request! {hops} hops to seeder",
+                        RNS.LOG_INFO
+                    )
+                    return dest_hash
 
             # Re-request path periodically
-            if dest_hash and (time.time() - last_request > retry_interval):
-                attempt += 1
-                RNS.log(
-                    f"Re-requesting path (attempt {attempt})...",
-                    RNS.LOG_INFO
-                )
-                RNS.Transport.request_path(dest_hash)
-                last_request = time.time()
+            if dest_hash and dest_hash not in failed_dests:
+                if time.time() - last_request > retry_interval:
+                    attempt += 1
+                    RNS.log(
+                        f"Re-requesting path (attempt {attempt})...",
+                        RNS.LOG_INFO
+                    )
+                    RNS.Transport.request_path(dest_hash)
+                    last_request = time.time()
 
             if not self._running:
                 return None
