@@ -417,8 +417,20 @@ class Seeder:
         """
         Handle a manifest request — return the full ghost metadata.
         This lets a leecher who only has the hash get the full .ghost info.
+        Includes ALL known seeder dests (from ghost file + live seeders).
         """
         RNS.log("Serving manifest request", RNS.LOG_DEBUG)
+
+        # Collect all known seeder dests — from ghost file + all live seeders
+        all_dests = set(self.ghost.seeder_dests)
+        # Add our own dest
+        if self._destination:
+            all_dests.add(self._destination.hash.hex())
+        # Add dests from all other live seeders for this ghost hash
+        with WantAnnounceHandler._lock:
+            for gh, seeder in WantAnnounceHandler._seeders.items():
+                if seeder._destination:
+                    all_dests.add(seeder._destination.hash.hex())
 
         manifest = {
             "ghost_version": self.ghost.version,
@@ -433,8 +445,13 @@ class Seeder:
             "comment": self.ghost.comment,
             # Share ALL known seeder dests so leecher can connect to swarm
             "seeder_dest": self.ghost.seeder_dest,
-            "seeder_dests": list(self.ghost.seeder_dests),
+            "seeder_dests": list(all_dests),
         }
+
+        RNS.log(
+            f"Manifest response includes {len(all_dests)} seeder dest(s)",
+            RNS.LOG_DEBUG
+        )
 
         return umsgpack.packb(manifest)
 
