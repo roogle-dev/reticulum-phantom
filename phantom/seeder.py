@@ -1,16 +1,19 @@
 """
 Reticulum Phantom — Seeder Node
 
-The seeder announces a file's availability on the Reticulum mesh
-and serves chunk requests from leechers over encrypted RNS.Link
-connections.
+The seeder registers its file availability and passively listens
+for leecher 'want' announcements on the Reticulum mesh. When a
+matching want is detected, the seeder re-announces itself so the
+leecher can discover and connect to it.
 
 Flow:
   1. Load identity + parse .ghost file
   2. Create RNS.Destination for the ghost hash
   3. Register request handlers (manifest, chunk, status)
-  4. Announce on the mesh
-  5. Serve incoming chunk requests via RNS.Resource
+  4. Announce ONCE on the mesh (for routing)
+  5. Register with WantAnnounceHandler (passive listening)
+  6. When a want matches, re-announce so leecher connects to us
+  7. Serve incoming chunk requests via RNS.Resource
 """
 
 import os

@@ -510,13 +510,11 @@ class Leecher:
 
     def _discover_seeders(self, failed_dests=None):
         """
-        Find seeders using reverse discovery.
+        Reverse discovery: announce 'I want ghost_hash X' and wait
+        for seeders to respond by re-announcing themselves.
 
-        Instead of waiting for seeder announces, WE announce
-        "I want ghost_hash X" and seeders connect to us
-        with their destination hashes.
-
-        Also tries hint_dest from .ghost file as a fast-path.
+        The leecher never searches — it broadcasts demand and waits.
+        Seeders passively listen and respond when they have the file.
 
         Returns:
             List of destination hash bytes, or empty list if none found.
@@ -547,7 +545,7 @@ class Leecher:
                                     if destination_hash not in found_dests:
                                         found_dests.append(destination_hash)
                                         RNS.log(
-                                            f"Seeder responded via announce: "
+                                            f"Seeder responded: "
                                             f"{RNS.prettyhexrep(destination_hash)} "
                                             f"({len(found_dests)} total)",
                                             RNS.LOG_INFO
@@ -559,7 +557,7 @@ class Leecher:
         response_handler = SeederResponseHandler(input_hash)
         RNS.Transport.register_announce_handler(response_handler)
 
-        # ── Create want-destination (for future PEX use) ─────────
+        # ── Create want-destination ──────────────────────────────
         want_dest = RNS.Destination(
             self.identity.identity,
             RNS.Destination.IN,
@@ -568,90 +566,21 @@ class Leecher:
             "want",
             input_hash
         )
-        # ── Fast-path: try hint_dest from .ghost file ────────────
-        hint_dest = None
-        if self.ghost and self.ghost.seeder_dest:
-            try:
-                candidate = bytes.fromhex(self.ghost.seeder_dest)
-                if len(candidate) == 16 and candidate not in failed_dests:
-                    RNS.log(
-                        f"Trying known seeder (hint): "
-                        f"{self.ghost.seeder_dest[:16]}...",
-                        RNS.LOG_INFO
-                    )
-                    RNS.Transport.request_path(candidate)
-                    hint_dest = candidate
-            except (ValueError, Exception):
-                pass
-
-        # Check hint immediately
-        if hint_dest and hint_dest not in failed_dests:
-            if RNS.Transport.has_path(hint_dest):
-                hops = RNS.Transport.hops_to(hint_dest)
-                RNS.log(
-                    f"Hint seeder reachable ({hops} hops) — fast path!",
-                    RNS.LOG_INFO
-                )
-                with found_lock:
-                    if hint_dest not in found_dests:
-                        found_dests.append(hint_dest)
-                first_found.set()
-
-        # ── Direct dest hash from CLI ────────────────────────────
-        dest_hash = None
-        if not self.ghost:
-            try:
-                candidate = bytes.fromhex(input_hash)
-                if len(candidate) == 16 and candidate not in failed_dests:
-                    RNS.log(
-                        "Input looks like destination hash, requesting path...",
-                        RNS.LOG_INFO
-                    )
-                    RNS.Transport.request_path(candidate)
-                    dest_hash = candidate
-            except (ValueError, Exception):
-                pass
 
         # ── Announce "I want X" ──────────────────────────────────
         announce_data = umsgpack.packb({"ghost_hash": input_hash})
         want_dest.announce(app_data=announce_data)
 
         RNS.log(
-            f"📢 Announced want for {input_hash[:16]}... "
-            f"(retrying every {config.WANT_ANNOUNCE_INTERVAL}s)",
+            f"📢 Want announced: {input_hash[:16]}... "
+            f"— waiting for seeders to respond",
             RNS.LOG_INFO
         )
 
-        # ── Wait for seeder responses ────────────────────────────
-        start_time = time.time()
-        timeout = config.WANT_RESPONSE_TIMEOUT
+        # ── Wait for seeder responses (no timeout — retries forever) ─
         last_announce = time.time()
 
         while not first_found.is_set() and self._running:
-            elapsed = time.time() - start_time
-
-            # Timeout
-            if elapsed > timeout:
-                break
-
-            # Check direct dest hash
-            if dest_hash and dest_hash not in failed_dests:
-                if RNS.Transport.has_path(dest_hash):
-                    with found_lock:
-                        if dest_hash not in found_dests:
-                            found_dests.append(dest_hash)
-                    first_found.set()
-                    break
-
-            # Check hint after 2s
-            if hint_dest and hint_dest not in failed_dests:
-                if elapsed > 2 and RNS.Transport.has_path(hint_dest):
-                    with found_lock:
-                        if hint_dest not in found_dests:
-                            found_dests.append(hint_dest)
-                    first_found.set()
-                    break
-
             # Re-announce periodically
             if time.time() - last_announce > config.WANT_ANNOUNCE_INTERVAL:
                 want_dest.announce(app_data=announce_data)
@@ -664,15 +593,14 @@ class Leecher:
             time.sleep(1)
 
         if not found_dests:
-            # Cleanup want-destination before failing
+            # Only reach here if self._running became False (cancelled)
             self._cleanup_want_dest(want_dest)
-            self._fail("No seeders found on mesh")
             return []
 
         # ── Discovery window — collect more seeders ──────────────
         discovery_window = config.DEFAULT_DISCOVERY_WINDOW
         RNS.log(
-            f"First seeder found! Waiting {discovery_window}s for more...",
+            f"Seeder found! Waiting {discovery_window}s for more...",
             RNS.LOG_INFO
         )
         window_start = time.time()

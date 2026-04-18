@@ -646,9 +646,9 @@ def cmd_download(args):
     def on_state_change(state, info):
         nonlocal task_id
         if state == Leecher.STATE_DISCOVERING:
-            ui.print_info("Searching mesh for seeder...")
+            ui.print_info("Announcing want — waiting for seeders...")
         elif state == Leecher.STATE_CONNECTING:
-            ui.print_info("Establishing encrypted link...")
+            ui.print_info("Seeder responded — establishing encrypted link...")
         elif state == Leecher.STATE_FETCHING_MANIFEST:
             ui.print_info("Fetching manifest from seeder...")
         elif state == Leecher.STATE_DOWNLOADING:

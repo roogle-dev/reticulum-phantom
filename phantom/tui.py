@@ -121,7 +121,7 @@ class TransferRow(Static):
         elif t.state == "seeding":
             state_str = f"[green]SEEDING[/green] [dim]Peers:[/dim] {t.peers}"
         elif t.state == "discovering":
-            state_str = "[yellow]⏳ DISCOVERING...[/yellow]"
+            state_str = "[yellow]📢 WAITING FOR SEEDER...[/yellow]"
         elif t.state == "connecting":
             state_str = "[yellow]🔗 CONNECTING...[/yellow]"
         elif t.state == "fetching_manifest":
