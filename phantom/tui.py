@@ -240,6 +240,11 @@ class PhantomTUI(App):
         margin: 1;
     }
 
+    #peers-table {
+        height: 1fr;
+        margin: 1;
+    }
+
     #settings-container {
         height: 1fr;
         margin: 1;
@@ -320,6 +325,14 @@ class PhantomTUI(App):
                 )
                 yield DataTable(id="ghost-table", zebra_stripes=True)
 
+            # ─── Peers Tab ────────────────────────────────────────
+            with TabPane("Peers", id="tab-peers"):
+                yield Static(
+                    " [bold]🌐 Mesh Peers[/bold]  "
+                    "[dim]Phantom nodes discovered on the network[/dim]"
+                )
+                yield DataTable(id="peers-table", zebra_stripes=True)
+
             # ─── Settings Tab ────────────────────────────────────────
             with TabPane("Settings", id="tab-settings"):
                 yield Static(
@@ -340,6 +353,7 @@ class PhantomTUI(App):
 
         # Initialize tables
         self._init_ghost_table()
+        self._init_peers_table()
         self._init_settings_table()
 
         # Initial refresh
@@ -387,6 +401,7 @@ class PhantomTUI(App):
             self._refresh_network()
             self._refresh_identity()
             self._refresh_transfers()
+            self._refresh_peers_table()
         except Exception:
             pass
 
@@ -500,6 +515,54 @@ class PhantomTUI(App):
                     g["ghost_hash"],
                     seeder_dest,
                     created,
+                )
+        except Exception:
+            pass
+
+    def _init_peers_table(self):
+        """Initialize the peers table."""
+        try:
+            table = self.query_one("#peers-table", DataTable)
+            table.add_columns(
+                "Identity", "Files Seeding", "File Names", "Last Seen"
+            )
+        except Exception:
+            pass
+
+    def _refresh_peers_table(self):
+        """Refresh peers table data."""
+        try:
+            table = self.query_one("#peers-table", DataTable)
+            table.clear()
+
+            peers = self.engine.get_peers()
+            for peer in peers:
+                identity = peer.get("identity_short", "Unknown")
+                files = peer.get("files", {})
+                file_count = str(len(files))
+
+                # Build file names list
+                names = []
+                for gh, info in files.items():
+                    name = info.get("name", "Unknown")
+                    size = GhostFile._human_size(info.get("size", 0))
+                    names.append(f"{name} ({size})")
+                names_str = ", ".join(names) if names else "None"
+
+                # Last seen
+                from datetime import datetime
+                try:
+                    last_seen = datetime.fromtimestamp(
+                        peer["last_seen"]
+                    ).strftime("%H:%M:%S")
+                except Exception:
+                    last_seen = "Unknown"
+
+                table.add_row(
+                    identity,
+                    file_count,
+                    names_str,
+                    last_seen,
                 )
         except Exception:
             pass

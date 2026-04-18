@@ -70,6 +70,9 @@ class PhantomEngine:
         # Event log (ring buffer)
         self._log = deque(maxlen=200)
 
+        # Known peers on the mesh
+        self._peers = {}  # identity_hex → {name, dest, last_seen, files[]}
+
         # Callbacks for TUI
         self.on_log = None           # Called with (timestamp, level, message)
         self.on_transfer_update = None  # Called with (transfer_id)
@@ -110,6 +113,9 @@ class PhantomEngine:
         self._running = True
         self._add_log("info",
                        f"Engine started | Identity: {self._identity.hash_pretty}")
+
+        # Register announce handler to track peers on the mesh
+        self._register_peer_handler()
 
     def stop(self):
         """Stop all transfers and shut down."""
@@ -344,6 +350,11 @@ class PhantomEngine:
         with self._lock:
             return list(self._log)
 
+    def get_peers(self):
+        """Get list of known peers on the mesh."""
+        with self._lock:
+            return list(self._peers.values())
+
     def get_network_stats(self):
         """Get network stats for display."""
         total_up = sum(
@@ -371,6 +382,57 @@ class PhantomEngine:
         }
 
     # ─── Internal ──────────────────────────────────────────────────────────
+
+    def _register_peer_handler(self):
+        """Register an announce handler to track Phantom peers on the mesh."""
+        engine = self
+
+        class PeerAnnounceHandler:
+            def __init__(self):
+                self.aspect_filter = config.RNS_APP_NAME + ".swarm"
+
+            def received_announce(self, destination_hash, announced_identity, app_data):
+                if app_data:
+                    try:
+                        metadata = umsgpack.unpackb(app_data)
+                        ghost_hash = metadata.get("ghost_hash", "")
+                        file_name = metadata.get("name", "Unknown")
+                        file_size = metadata.get("size", 0)
+
+                        identity_hex = announced_identity.hash.hex()
+                        dest_hex = destination_hash.hex()
+
+                        with engine._lock:
+                            if identity_hex not in engine._peers:
+                                engine._peers[identity_hex] = {
+                                    "identity": identity_hex,
+                                    "identity_short": identity_hex[:16] + "...",
+                                    "files": {},
+                                    "last_seen": time.time(),
+                                    "dest_hashes": [],
+                                }
+                                engine._add_log(
+                                    "info",
+                                    f"New peer discovered: {identity_hex[:16]}..."
+                                )
+
+                            peer = engine._peers[identity_hex]
+                            peer["last_seen"] = time.time()
+                            peer["files"][ghost_hash] = {
+                                "name": file_name,
+                                "size": file_size,
+                                "ghost_hash": ghost_hash,
+                                "dest_hash": dest_hex,
+                            }
+                            if dest_hex not in peer["dest_hashes"]:
+                                peer["dest_hashes"].append(dest_hex)
+
+                    except Exception:
+                        pass
+
+        handler = PeerAnnounceHandler()
+        RNS.Transport.register_announce_handler(handler)
+        self._add_log("info", "Listening for peers on mesh...")
 
     def _poll_seeder(self, transfer_id):
         """Poll seeder stats periodically."""
