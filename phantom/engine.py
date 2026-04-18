@@ -45,6 +45,8 @@ class TransferInfo:
         self.error = None
         self.started_at = time.time()
         self.destination_hash = ""
+        self._ghost_path = None        # Path to .ghost file (for resume)
+        self._source_path = None       # Source file path (for seed resume)
         self._seeder = None
         self._leecher = None
 
@@ -262,6 +264,13 @@ class PhantomEngine:
                 transfer.name = leecher.ghost.name
                 transfer.total_chunks = leecher.total_chunks
                 transfer.ghost_hash = leecher.ghost_hash
+                # Save ghost_path for potential resume
+                ghost_lib = os.path.join(
+                    config.GHOSTS_DIR,
+                    leecher.ghost.name + config.GHOST_EXTENSION
+                )
+                if os.path.isfile(ghost_lib):
+                    transfer._ghost_path = ghost_lib
                 # Save download state for resume
                 self._save_download_state(
                     leecher.ghost_hash, destination_hash
@@ -303,6 +312,7 @@ class PhantomEngine:
                     transfer.name = ghost.name
                     transfer.ghost_hash = ghost.ghost_hash
                     transfer.total_chunks = ghost.chunk_count
+                    transfer._ghost_path = ghost_path
                     self._add_log("info",
                                   f"↓ Downloading: {ghost.name} via .ghost file")
                     leecher.download_from_ghost(ghost_path)
@@ -343,6 +353,43 @@ class PhantomEngine:
         with self._lock:
             self._transfers.pop(transfer_id, None)
         self._add_log("info", f"Transfer removed: {transfer_id}")
+
+    def resume_transfer(self, transfer_id):
+        """
+        Resume a stopped/failed/cancelled download.
+        Removes the old transfer and re-starts using the ghost file.
+        Existing chunks on disk are automatically reused.
+        """
+        with self._lock:
+            transfer = self._transfers.get(transfer_id)
+
+        if not transfer:
+            self._add_log("error", "Transfer not found")
+            return None
+
+        if transfer.direction != "download":
+            self._add_log("info", f"Cannot resume seed — seeds auto-start")
+            return None
+
+        # Determine what to re-download
+        ghost_path = transfer._ghost_path
+        dest_hash = transfer.destination_hash
+        name = transfer.name
+
+        # Remove old transfer
+        with self._lock:
+            self._transfers.pop(transfer_id, None)
+
+        self._add_log("info", f"🔄 Resuming download: {name}")
+
+        # Re-start from ghost file if we have one, otherwise use dest hash
+        if ghost_path and os.path.isfile(ghost_path):
+            return self.download_file(ghost_path)
+        elif dest_hash:
+            return self.download_file(dest_hash)
+        else:
+            self._add_log("error", "Cannot resume — no ghost file or destination hash")
+            return None
 
     def get_transfers(self):
         """Get list of all transfers for display."""
