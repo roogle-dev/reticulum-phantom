@@ -158,6 +158,15 @@ class Leecher:
             if not self._running:
                 return
 
+            # Clear failed dests on retry — seeders may have come back
+            if attempt > 0:
+                RNS.log(
+                    f"Retry attempt {attempt}: clearing {len(failed_dests)} "
+                    f"failed dest(s) — seeders may have returned",
+                    RNS.LOG_INFO
+                )
+                failed_dests.clear()
+
             try:
                 # Step 1: Discover ALL seeders
                 self._set_state(self.STATE_DISCOVERING)
@@ -256,6 +265,7 @@ class Leecher:
                             RNS.LOG_WARNING
                         )
                         time.sleep(2)
+                        attempt += 1
                         continue
                     return
 
