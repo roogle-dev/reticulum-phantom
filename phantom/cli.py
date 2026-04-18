@@ -307,8 +307,19 @@ def main():
         ui.console.print("\n[dim]Interrupted.[/dim]")
         sys.exit(0)
     except Exception as e:
-        ui.print_error(str(e))
-        sys.exit(1)
+        # For long-running commands (seed, seed-all), don't crash
+        if hasattr(args, 'command') and args.command in ("seed", "seed-all"):
+            ui.print_warning(f"Network error: {e}")
+            ui.print_info("Seeders are still running. Press Ctrl+C to stop.")
+            try:
+                while True:
+                    time.sleep(30)
+            except KeyboardInterrupt:
+                ui.console.print("\n[dim]Interrupted.[/dim]")
+                sys.exit(0)
+        else:
+            ui.print_error(str(e))
+            sys.exit(1)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
