@@ -823,6 +823,26 @@ def cmd_download(args):
             )
             sys.exit(1)
         ui.print_info(f"Loading ghost file: {ghost_path}")
+
+        # Check if file already exists
+        ghost = GhostFile.load(ghost_path)
+        if ghost:
+            output_dir = getattr(args, 'output', None)
+            if output_dir:
+                existing_path = os.path.join(os.path.abspath(output_dir), ghost.name)
+            else:
+                existing_path = os.path.join(config.DOWNLOADS_DIR, ghost.name)
+
+            if os.path.isfile(existing_path):
+                file_size = os.path.getsize(existing_path)
+                if file_size == ghost.file_size:
+                    ui.print_info(
+                        f"File already exists: {existing_path} "
+                        f"({GhostFile._human_size(file_size)})"
+                    )
+                    ui.print_info("Skipping download — file is complete.")
+                    return
+
         leecher.download_from_ghost(ghost_path)
     elif os.path.isfile(target):
         # Maybe it's a ghost file without the extension check
