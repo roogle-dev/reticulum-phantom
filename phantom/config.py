@@ -14,7 +14,7 @@ import platform
 # ─── App Constants ─────────────────────────────────────────────────────────────
 
 APP_NAME = "phantom"
-APP_VERSION = "0.5.0"
+APP_VERSION = "0.6.0"
 GHOST_EXTENSION = ".ghost"
 GHOST_FORMAT_VERSION = 1
 
