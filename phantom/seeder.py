@@ -28,6 +28,77 @@ from .chunker import Chunker
 from .network import PhantomNetwork
 
 
+class WantAnnounceHandler:
+    """
+    Global singleton that listens for leecher 'want' announcements.
+
+    All seeders register with this handler. When a leecher announces
+    "I want ghost_hash X", the handler dispatches to the matching
+    seeder which then connects back to the leecher.
+    """
+
+    _instance = None
+    _seeders = {}    # ghost_hash → Seeder instance
+    _lock = threading.Lock()
+    _registered = False
+
+    @classmethod
+    def register_seeder(cls, ghost_hash, seeder):
+        """Register a seeder to respond to wants for a ghost_hash."""
+        with cls._lock:
+            cls._seeders[ghost_hash] = seeder
+
+        # Register the handler singleton with RNS Transport (once)
+        if not cls._registered:
+            cls._instance = cls()
+            RNS.Transport.register_announce_handler(cls._instance)
+            cls._registered = True
+            RNS.log(
+                "WantAnnounceHandler registered — listening for wants",
+                RNS.LOG_INFO
+            )
+
+    @classmethod
+    def unregister_seeder(cls, ghost_hash):
+        """Remove a seeder from the handler."""
+        with cls._lock:
+            cls._seeders.pop(ghost_hash, None)
+
+    def __init__(self):
+        # Catch announces for "phantom.want.*" aspect
+        self.aspect_filter = config.RNS_APP_NAME + ".want"
+
+    def received_announce(self, destination_hash, announced_identity, app_data):
+        """Called by RNS when a 'want' announcement is received."""
+        if not app_data:
+            return
+
+        try:
+            metadata = umsgpack.unpackb(app_data)
+            wanted_hash = metadata.get("ghost_hash", "")
+
+            with self._lock:
+                seeder = self._seeders.get(wanted_hash)
+
+            if seeder:
+                RNS.log(
+                    f"Leecher wants {wanted_hash[:16]}... — "
+                    f"we have it! Responding...",
+                    RNS.LOG_INFO
+                )
+                # Respond in a thread to avoid blocking the handler
+                threading.Thread(
+                    target=seeder._respond_to_want,
+                    args=(destination_hash,),
+                    daemon=True
+                ).start()
+        except Exception as e:
+            RNS.log(
+                f"Error processing want announce: {e}",
+                RNS.LOG_WARNING
+            )
+
+
 class Seeder:
     """
     Seeds a file on the Reticulum mesh.
@@ -82,12 +153,11 @@ class Seeder:
         Start seeding the file.
 
         Creates the RNS destination, registers handlers,
-        and announces on the mesh.
+        and registers with the WantAnnounceHandler to
+        passively respond to leecher "want" announcements.
 
         Args:
-            announce_delay: Seconds to wait before first announce.
-                            Used by seed-all to stagger announces
-                            and avoid flooding the mesh.
+            announce_delay: Seconds delay (legacy, kept for API compat).
         """
         if self._running:
             RNS.log("Seeder already running", RNS.LOG_WARNING)
@@ -127,18 +197,6 @@ class Seeder:
             self._on_link_established
         )
 
-        # Announce on the mesh — only ghost_hash for privacy
-        # File name/size details are shared only over encrypted links
-        announce_data = umsgpack.packb({
-            "ghost_hash": self.ghost.ghost_hash,
-        })
-
-        # Stagger initial announce in seed-all mode to avoid mesh flooding
-        if announce_delay > 0:
-            time.sleep(announce_delay)
-
-        self._destination.announce(app_data=announce_data)
-
         self._running = True
         self.start_time = time.time()
 
@@ -159,26 +217,24 @@ class Seeder:
                 self.ghost.save(src_ghost)
 
         RNS.log(
-            f"Seeding: {self.ghost.name} | "
+            f"Seeding (silent): {self.ghost.name} | "
             f"Hash: {self.ghost.ghost_hash} | "
             f"Destination: {RNS.prettyhexrep(self._destination.hash)}",
             RNS.LOG_INFO
         )
 
-        # Start periodic re-announce thread
-        settings = config.load_settings()
-        interval = settings.get("announce_interval",
-                                config.DEFAULT_ANNOUNCE_INTERVAL)
-        self._announce_thread = threading.Thread(
-            target=self._announce_loop,
-            args=(interval,),
-            daemon=True
+        # Register with the global want-announce handler
+        # (seeder no longer announces — waits for leechers to ask)
+        WantAnnounceHandler.register_seeder(
+            self.ghost.ghost_hash, self
         )
-        self._announce_thread.start()
 
     def stop(self):
         """Stop seeding and tear down all links."""
         self._running = False
+
+        # Unregister from want handler
+        WantAnnounceHandler.unregister_seeder(self.ghost.ghost_hash)
 
         for link in self._active_links:
             try:
@@ -206,27 +262,93 @@ class Seeder:
 
         RNS.log(f"Stopped seeding: {self.ghost.name}", RNS.LOG_INFO)
 
-    def _announce_loop(self, interval):
-        """Periodically re-announce on the mesh with jitter to avoid bursts."""
-        while self._running:
-            # Add ±10% jitter so multiple seeders don't re-announce simultaneously
-            jitter = interval * random.uniform(-0.1, 0.1)
-            time.sleep(interval + jitter)
-            if self._running and self._destination:
-                try:
-                    announce_data = umsgpack.packb({
-                        "ghost_hash": self.ghost.ghost_hash,
-                    })
-                    self._destination.announce(app_data=announce_data)
+    def _respond_to_want(self, leecher_dest_hash):
+        """
+        Respond to a leecher's 'want' announcement.
+
+        Connects to the leecher's want-destination and sends
+        our seeder destination hash so the leecher can connect
+        to us for chunk downloads.
+        """
+        if not self._running or not self._destination:
+            return
+
+        try:
+            # Check if we have a path to the leecher
+            if not RNS.Transport.has_path(leecher_dest_hash):
+                RNS.Transport.request_path(leecher_dest_hash)
+                # Wait briefly for path
+                deadline = time.time() + 10
+                while not RNS.Transport.has_path(leecher_dest_hash):
+                    if time.time() > deadline:
+                        RNS.log(
+                            f"No path to leecher {leecher_dest_hash.hex()[:16]}...",
+                            RNS.LOG_WARNING
+                        )
+                        return
+                    time.sleep(0.5)
+
+            # Resolve the leecher's identity
+            leecher_identity = RNS.Identity.recall(leecher_dest_hash)
+            if not leecher_identity:
+                RNS.log(
+                    f"Cannot recall leecher identity",
+                    RNS.LOG_WARNING
+                )
+                return
+
+            # Build the leecher's want-destination so we can link to it
+            leecher_dest = RNS.Destination(
+                leecher_identity,
+                RNS.Destination.OUT,
+                RNS.Destination.SINGLE,
+                config.RNS_APP_NAME,
+                "want",
+                self.ghost.ghost_hash
+            )
+
+            # Create link to the leecher
+            link = RNS.Link(leecher_dest)
+
+            # Wait for link to establish
+            deadline = time.time() + config.DEFAULT_LINK_TIMEOUT
+            while link.status != RNS.Link.ACTIVE:
+                if link.status == RNS.Link.CLOSED:
                     RNS.log(
-                        f"Re-announced: {self.ghost.name}",
-                        RNS.LOG_DEBUG
-                    )
-                except Exception as e:
-                    RNS.log(
-                        f"Re-announce failed: {e}",
+                        "Link to leecher failed",
                         RNS.LOG_WARNING
                     )
+                    return
+                if time.time() > deadline:
+                    link.teardown()
+                    return
+                time.sleep(0.2)
+
+            # Send our destination hash to the leecher
+            our_dest_hash = self._destination.hash
+            response_data = umsgpack.packb({
+                "seeder_dest": our_dest_hash,
+                "ghost_hash": self.ghost.ghost_hash,
+            })
+
+            packet = RNS.Packet(link, response_data)
+            packet.send()
+
+            RNS.log(
+                f"Responded to want for {self.ghost.name} — "
+                f"sent dest {self._destination.hash.hex()[:16]}...",
+                RNS.LOG_INFO
+            )
+
+            # Keep link alive briefly so packet delivers, then teardown
+            time.sleep(2)
+            link.teardown()
+
+        except Exception as e:
+            RNS.log(
+                f"Failed to respond to want: {e}",
+                RNS.LOG_WARNING
+            )
 
     def _on_link_established(self, link):
         """Called when a leecher connects."""

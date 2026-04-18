@@ -378,63 +378,84 @@ class Leecher:
             )
 
         def discovery_watcher():
-            """Background thread: watch for new seeders and add them."""
-            class LiveAnnounceHandler:
-                def __init__(self, target_hash):
-                    self.aspect_filter = None
-                    self._target = target_hash
+            """Background thread: re-announce wants to attract new seeders."""
+            # Create a want-destination for mid-download discovery
+            try:
+                live_want_dest = RNS.Destination(
+                    self.identity.identity,
+                    RNS.Destination.IN,
+                    RNS.Destination.SINGLE,
+                    config.RNS_APP_NAME,
+                    "want",
+                    self.ghost_hash
+                )
+            except Exception:
+                # Destination may still be registered from initial discovery
+                return
 
-                def received_announce(self, destination_hash, announced_identity, app_data):
-                    if all_done.is_set():
-                        return
-                    if app_data:
-                        try:
-                            metadata = umsgpack.unpackb(app_data)
-                            gh = metadata.get("ghost_hash", "")
-                            if gh == self._target:
-                                if destination_hash not in active_peer_ids:
-                                    # New seeder! Connect and add to swarm
-                                    RNS.log(
-                                        f"New seeder discovered during download: "
-                                        f"{RNS.prettyhexrep(destination_hash)}",
-                                        RNS.LOG_INFO
-                                    )
-                                    # Request path then connect
-                                    if not RNS.Transport.has_path(destination_hash):
-                                        RNS.Transport.request_path(destination_hash)
-                                    # Wait for path
-                                    deadline = time.time() + 10
-                                    while not RNS.Transport.has_path(destination_hash):
-                                        if time.time() > deadline or all_done.is_set():
-                                            return
-                                        time.sleep(0.5)
+            def _on_live_link(link):
+                link.set_packet_callback(
+                    lambda data, pkt: _handle_live_response(data, link)
+                )
 
-                                    link = self._outer._connect_to_seeder(destination_hash)
-                                    if link:
-                                        active_peer_ids.add(destination_hash)
-                                        peer_id = len(workers)
-                                        t = threading.Thread(
-                                            target=peer_worker,
-                                            args=(destination_hash, link, peer_id),
-                                            daemon=True
-                                        )
-                                        workers.append(t)
-                                        t.start()
-                                        RNS.log(
-                                            f"New peer joined swarm! "
-                                            f"Now {len(active_peer_ids)} peer(s)",
-                                            RNS.LOG_INFO
-                                        )
-                        except Exception:
-                            pass
+            def _handle_live_response(data, link):
+                if all_done.is_set():
+                    return
+                try:
+                    metadata = umsgpack.unpackb(data)
+                    seeder_dest = metadata.get("seeder_dest")
+                    if seeder_dest and len(seeder_dest) == 16:
+                        if seeder_dest not in active_peer_ids:
+                            RNS.log(
+                                f"New seeder discovered during download: "
+                                f"{seeder_dest.hex()[:16]}...",
+                                RNS.LOG_INFO
+                            )
+                            # Request path then connect
+                            if not RNS.Transport.has_path(seeder_dest):
+                                RNS.Transport.request_path(seeder_dest)
+                            deadline = time.time() + 10
+                            while not RNS.Transport.has_path(seeder_dest):
+                                if time.time() > deadline or all_done.is_set():
+                                    return
+                                time.sleep(0.5)
 
-            handler = LiveAnnounceHandler(self.ghost_hash)
-            handler._outer = self
-            RNS.Transport.register_announce_handler(handler)
+                            new_link = self._connect_to_seeder(seeder_dest)
+                            if new_link:
+                                active_peer_ids.add(seeder_dest)
+                                peer_id = len(workers)
+                                t = threading.Thread(
+                                    target=peer_worker,
+                                    args=(seeder_dest, new_link, peer_id),
+                                    daemon=True
+                                )
+                                workers.append(t)
+                                t.start()
+                                RNS.log(
+                                    f"New peer joined swarm! "
+                                    f"Now {len(active_peer_ids)} peer(s)",
+                                    RNS.LOG_INFO
+                                )
+                except Exception:
+                    pass
 
-            # Keep watching until download completes
+            live_want_dest.set_link_established_callback(_on_live_link)
+
+            # Periodically re-announce want during download
+            announce_data = umsgpack.packb({"ghost_hash": self.ghost_hash})
             while not all_done.is_set() and self._running:
-                time.sleep(1)
+                try:
+                    live_want_dest.announce(app_data=announce_data)
+                except Exception:
+                    pass
+                # Wait before next re-announce
+                for _ in range(config.WANT_ANNOUNCE_INTERVAL):
+                    if all_done.is_set() or not self._running:
+                        break
+                    time.sleep(1)
+
+            # Cleanup
+            self._cleanup_want_dest(live_want_dest)
 
         # Start discovery watcher in background
         watcher = threading.Thread(target=discovery_watcher, daemon=True)
@@ -484,8 +505,13 @@ class Leecher:
 
     def _discover_seeders(self, failed_dests=None):
         """
-        Find ALL seeders for the requested ghost_hash.
-        Collects seeders during a discovery window, then returns all found.
+        Find seeders using reverse discovery.
+
+        Instead of waiting for seeder announces, WE announce
+        "I want ghost_hash X" and seeders connect to us
+        with their destination hashes.
+
+        Also tries hint_dest from .ghost file as a fast-path.
 
         Returns:
             List of destination hash bytes, or empty list if none found.
@@ -494,60 +520,56 @@ class Leecher:
             failed_dests = set()
 
         input_hash = self.ghost_hash
-        found_dests = []  # Collect all discovered seeders
+        found_dests = []    # Collected seeder dest hashes
         found_lock = threading.Lock()
-        first_found = threading.Event()  # Signal when first seeder found
+        first_found = threading.Event()
 
-        class SwarmAnnounceHandler:
-            """Collect ALL seeders that announce matching ghost_hash."""
-            def __init__(self, target_ghost_hash):
-                self.aspect_filter = None  # Catch ALL announces
-                self._target = target_ghost_hash
+        # ── Create want-destination ──────────────────────────────
+        want_dest = RNS.Destination(
+            self.identity.identity,
+            RNS.Destination.IN,
+            RNS.Destination.SINGLE,
+            config.RNS_APP_NAME,
+            "want",
+            input_hash
+        )
 
-            def received_announce(self, destination_hash, announced_identity, app_data):
-                if app_data:
-                    try:
-                        metadata = umsgpack.unpackb(app_data)
-                        gh = metadata.get("ghost_hash", "")
-                        if gh == self._target:
-                            failed_dests.discard(destination_hash)
-                            with found_lock:
-                                if destination_hash not in found_dests:
-                                    found_dests.append(destination_hash)
-                                    RNS.log(
-                                        f"Found seeder via announce: "
-                                        f"{RNS.prettyhexrep(destination_hash)} "
-                                        f"({len(found_dests)} total)",
-                                        RNS.LOG_INFO
-                                    )
-                            first_found.set()
-                    except Exception:
-                        pass
-
-        # Register announce handler
-        handler = SwarmAnnounceHandler(input_hash)
-        RNS.Transport.register_announce_handler(handler)
-
-        if failed_dests:
-            RNS.log(
-                f"Searching mesh for seeders "
-                f"({len(failed_dests)} failed)...",
-                RNS.LOG_INFO
-            )
-        else:
-            RNS.log(
-                f"Searching mesh for ghost {input_hash[:16]}...",
-                RNS.LOG_INFO
+        def _on_want_link(link):
+            """Seeder connected to our want-destination."""
+            link.set_packet_callback(
+                lambda data, packet: _handle_seeder_response(data, link)
             )
 
-        # Hint: request path for ghost file's seeder_dest (non-blocking)
+        def _handle_seeder_response(data, link):
+            """Seeder sent us their dest hash."""
+            try:
+                metadata = umsgpack.unpackb(data)
+                seeder_dest = metadata.get("seeder_dest")
+                if seeder_dest and len(seeder_dest) == 16:
+                    if seeder_dest not in failed_dests:
+                        with found_lock:
+                            if seeder_dest not in found_dests:
+                                found_dests.append(seeder_dest)
+                                RNS.log(
+                                    f"Seeder responded: "
+                                    f"{seeder_dest.hex()[:16]}... "
+                                    f"({len(found_dests)} total)",
+                                    RNS.LOG_INFO
+                                )
+                        first_found.set()
+            except Exception as e:
+                RNS.log(f"Bad seeder response: {e}", RNS.LOG_WARNING)
+
+        want_dest.set_link_established_callback(_on_want_link)
+
+        # ── Fast-path: try hint_dest from .ghost file ────────────
         hint_dest = None
         if self.ghost and self.ghost.seeder_dest:
             try:
                 candidate = bytes.fromhex(self.ghost.seeder_dest)
                 if len(candidate) == 16 and candidate not in failed_dests:
                     RNS.log(
-                        f"Requesting path to known seeder (hint): "
+                        f"Trying known seeder (hint): "
                         f"{self.ghost.seeder_dest[:16]}...",
                         RNS.LOG_INFO
                     )
@@ -556,75 +578,12 @@ class Leecher:
             except (ValueError, Exception):
                 pass
 
-        # Direct dest hash from CLI (not ghost file)
-        dest_hash = None
-        if not self.ghost:
-            try:
-                candidate = bytes.fromhex(input_hash)
-                if len(candidate) == 16 and candidate not in failed_dests:
-                    RNS.log(
-                        f"Input looks like destination hash, requesting path...",
-                        RNS.LOG_INFO
-                    )
-                    RNS.Transport.request_path(candidate)
-                    dest_hash = candidate
-
-                    # Try to recover ghost_hash from cached app_data
-                    app_data = RNS.Identity.recall_app_data(candidate)
-                    if app_data:
-                        try:
-                            metadata = umsgpack.unpackb(app_data)
-                            real_ghost = metadata.get("ghost_hash")
-                            if real_ghost:
-                                RNS.log(
-                                    f"Recovered ghost_hash: {real_ghost}",
-                                    RNS.LOG_INFO
-                                )
-                                self.ghost_hash = real_ghost
-                                handler._target = real_ghost
-                        except Exception:
-                            pass
-            except (ValueError, Exception):
-                pass
-
-        RNS.log("Waiting for seeder announces...", RNS.LOG_INFO)
-        discovery_window = config.DEFAULT_DISCOVERY_WINDOW
-        start_time = time.time()
-
-        # Proactive check: scan cached app_data for already-known destinations
-        # This catches seeders whose announce was received BEFORE we registered
-        # our handler (handler only fires for NEW announces).
-        try:
-            import RNS.Transport as Transport
-            if hasattr(Transport, 'announce_table'):
-                for dest_hash_hex, entry in list(Transport.announce_table.items()):
-                    try:
-                        dest_bytes = bytes.fromhex(dest_hash_hex) if isinstance(dest_hash_hex, str) else dest_hash_hex
-                        app_data = RNS.Identity.recall_app_data(dest_bytes)
-                        if app_data:
-                            metadata = umsgpack.unpackb(app_data)
-                            gh = metadata.get("ghost_hash", "")
-                            if gh == input_hash and dest_bytes not in failed_dests:
-                                with found_lock:
-                                    if dest_bytes not in found_dests:
-                                        found_dests.append(dest_bytes)
-                                        RNS.log(
-                                            f"Found seeder in cache: "
-                                            f"{RNS.prettyhexrep(dest_bytes)}",
-                                            RNS.LOG_INFO
-                                        )
-                                first_found.set()
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-        # Also check hint_dest immediately (no 2s delay)
+        # Check hint immediately
         if hint_dest and hint_dest not in failed_dests:
             if RNS.Transport.has_path(hint_dest):
                 hops = RNS.Transport.hops_to(hint_dest)
                 RNS.log(
-                    f"Hint seeder already reachable ({hops} hops) — fast connect!",
+                    f"Hint seeder reachable ({hops} hops) — fast path!",
                     RNS.LOG_INFO
                 )
                 with found_lock:
@@ -632,46 +591,80 @@ class Leecher:
                         found_dests.append(hint_dest)
                 first_found.set()
 
-        # Phase 1: Wait for first seeder (patient — up to 120s)
-        while not first_found.is_set() and self._running:
-            # Check CLI direct dest hash
-            if dest_hash and dest_hash not in failed_dests:
-                if RNS.Transport.has_path(dest_hash):
-                    hops = RNS.Transport.hops_to(dest_hash)
+        # ── Direct dest hash from CLI ────────────────────────────
+        dest_hash = None
+        if not self.ghost:
+            try:
+                candidate = bytes.fromhex(input_hash)
+                if len(candidate) == 16 and candidate not in failed_dests:
                     RNS.log(
-                        f"Path found via direct request! {hops} hops",
+                        "Input looks like destination hash, requesting path...",
                         RNS.LOG_INFO
                     )
+                    RNS.Transport.request_path(candidate)
+                    dest_hash = candidate
+            except (ValueError, Exception):
+                pass
+
+        # ── Announce "I want X" ──────────────────────────────────
+        announce_data = umsgpack.packb({"ghost_hash": input_hash})
+        want_dest.announce(app_data=announce_data)
+
+        RNS.log(
+            f"📢 Announced want for {input_hash[:16]}... "
+            f"(retrying every {config.WANT_ANNOUNCE_INTERVAL}s)",
+            RNS.LOG_INFO
+        )
+
+        # ── Wait for seeder responses ────────────────────────────
+        start_time = time.time()
+        timeout = config.WANT_RESPONSE_TIMEOUT
+        last_announce = time.time()
+
+        while not first_found.is_set() and self._running:
+            elapsed = time.time() - start_time
+
+            # Timeout
+            if elapsed > timeout:
+                break
+
+            # Check direct dest hash
+            if dest_hash and dest_hash not in failed_dests:
+                if RNS.Transport.has_path(dest_hash):
                     with found_lock:
                         if dest_hash not in found_dests:
                             found_dests.append(dest_hash)
                     first_found.set()
                     break
 
-            # Check hint path after 2s
+            # Check hint after 2s
             if hint_dest and hint_dest not in failed_dests:
-                if time.time() - start_time > 2:
-                    if RNS.Transport.has_path(hint_dest):
-                        hops = RNS.Transport.hops_to(hint_dest)
-                        RNS.log(
-                            f"Hint seeder reachable ({hops} hops)",
-                            RNS.LOG_INFO
-                        )
-                        with found_lock:
-                            if hint_dest not in found_dests:
-                                found_dests.append(hint_dest)
-                        first_found.set()
-                        break
+                if elapsed > 2 and RNS.Transport.has_path(hint_dest):
+                    with found_lock:
+                        if hint_dest not in found_dests:
+                            found_dests.append(hint_dest)
+                    first_found.set()
+                    break
 
-            if not self._running:
-                return []
+            # Re-announce periodically
+            if time.time() - last_announce > config.WANT_ANNOUNCE_INTERVAL:
+                want_dest.announce(app_data=announce_data)
+                last_announce = time.time()
+                RNS.log(
+                    f"📢 Re-announced want for {input_hash[:16]}...",
+                    RNS.LOG_DEBUG
+                )
+
             time.sleep(1)
 
         if not found_dests:
+            # Cleanup want-destination before failing
+            self._cleanup_want_dest(want_dest)
             self._fail("No seeders found on mesh")
             return []
 
-        # Phase 2: Discovery window — collect more seeders
+        # ── Discovery window — collect more seeders ──────────────
+        discovery_window = config.DEFAULT_DISCOVERY_WINDOW
         RNS.log(
             f"First seeder found! Waiting {discovery_window}s for more...",
             RNS.LOG_INFO
@@ -696,11 +689,28 @@ class Leecher:
                     break
                 time.sleep(0.5)
 
+        # Cleanup want-destination
+        self._cleanup_want_dest(want_dest)
+
         RNS.log(
             f"Discovery complete: {len(found_dests)} seeder(s) found",
             RNS.LOG_INFO
         )
         return found_dests
+
+    def _cleanup_want_dest(self, want_dest):
+        """Deregister a want-destination from RNS Transport."""
+        try:
+            RNS.Transport.deregister_destination(want_dest)
+        except Exception:
+            try:
+                with RNS.Transport.destinations_lock:
+                    RNS.Transport.destinations = [
+                        d for d in RNS.Transport.destinations
+                        if d.hash != want_dest.hash
+                    ]
+            except Exception:
+                pass
 
     def _connect_to_seeder(self, destination_hash):
         """
