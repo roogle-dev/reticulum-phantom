@@ -60,7 +60,6 @@ class Leecher:
         self.chunker = None
         self.ghost_hash = None
 
-        self._link = None
         self._state = self.STATE_IDLE
         self._error = None
         self._running = False
@@ -725,7 +724,7 @@ class Leecher:
             RNS.LOG_INFO
         )
 
-        self._link = RNS.Link(
+        link = RNS.Link(
             seeder_destination,
             established_callback=on_established,
             closed_callback=on_closed
@@ -737,7 +736,7 @@ class Leecher:
         while time.time() - start < timeout:
             if link_established.is_set():
                 RNS.log("Encrypted link established with seeder ✓", RNS.LOG_INFO)
-                return self._link
+                return link
             if link_failed.is_set():
                 RNS.log(
                     "Link to seeder failed — connection rejected or dropped",
@@ -849,47 +848,7 @@ class Leecher:
             self._fail(f"Failed to parse manifest: {e}")
             return False
 
-    def _download_chunks(self, link):
-        """
-        Download all missing chunks sequentially.
 
-        Args:
-            link: The established RNS.Link.
-
-        Returns:
-            True if all chunks downloaded successfully.
-        """
-        missing = self.chunker.get_missing_chunks()
-
-        if not missing:
-            RNS.log("All chunks already available!", RNS.LOG_INFO)
-            self.chunks_received = self.total_chunks
-            return True
-
-        RNS.log(
-            f"Downloading {len(missing)} missing chunks "
-            f"(have {self.total_chunks - len(missing)}/{self.total_chunks})",
-            RNS.LOG_INFO
-        )
-
-        self.chunks_received = self.total_chunks - len(missing)
-
-        for chunk_index in missing:
-            if not self._running:
-                return False
-
-            if not self._download_single_chunk(link, chunk_index):
-                # Retry once
-                RNS.log(
-                    f"Retrying chunk {chunk_index}...",
-                    RNS.LOG_WARNING
-                )
-                time.sleep(1)
-                if not self._download_single_chunk(link, chunk_index):
-                    self._fail(f"Failed to download chunk {chunk_index}")
-                    return False
-
-        return True
 
     def _download_single_chunk(self, link, chunk_index):
         """
@@ -990,15 +949,9 @@ class Leecher:
             return False
 
     def cancel(self):
-        """Cancel the current download."""
+        """Cancel the current download. Workers exit via _running flag."""
         self._running = False
         self._set_state(self.STATE_FAILED, "Cancelled by user")
-
-        if self._link:
-            try:
-                self._link.teardown()
-            except Exception:
-                pass
 
     def _fail(self, message):
         """Handle a download failure."""

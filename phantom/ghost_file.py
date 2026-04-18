@@ -165,7 +165,8 @@ class GhostFile:
             "created_at": self.created_at,
             "created_by": self.created_by,
             "comment": self.comment,
-            "source_path": self.source_path,
+            # NOTE: source_path intentionally excluded — privacy
+            # It would expose the creator's filesystem paths
             "seeder_dest": self.seeder_dest,
             "app_name": config.RNS_APP_NAME,
         }
