@@ -246,9 +246,16 @@ class PhantomNetwork:
 
     def _ensure_sideband_hub(self):
         """
-        Ensure the Sideband Hub interface is in the Reticulum config.
+        Ensure the Sideband Hub interface is enabled in the Reticulum config.
         This gives new users instant global mesh connectivity.
+        
+        Handles three cases:
+          1. No config exists → will be created by RNS, we add hub after
+          2. Config exists, no Sideband Hub → append it
+          3. Config exists, Sideband Hub disabled → enable it
         """
+        import re
+
         try:
             # Find the config file
             if self._configpath:
@@ -268,18 +275,56 @@ class PhantomNetwork:
             with open(config_file, "r") as f:
                 content = f.read()
 
-            # Check if Sideband Hub already configured
-            if "sideband.connect.reticulum.network" in content.lower():
-                # Still check if AutoInterface needs disabling
-                self._disable_autointerface(config_file, content)
-                return  # Already configured
+            has_sideband = (
+                "sideband.connect.reticulum.network" in content.lower()
+                or "sideband hub" in content.lower()
+            )
 
-            if "sideband hub" in content.lower():
-                self._disable_autointerface(config_file, content)
-                return  # Already has a sideband section
+            if has_sideband:
+                # Check if it's enabled
+                # Parse the Sideband Hub block to find enabled = No/Yes
+                lines = content.splitlines(True)
+                in_sideband = False
+                sideband_enabled = False
+                modified = False
 
-            # Append Sideband Hub interface
-            sideband_config = """
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+
+                    if "sideband hub" in stripped.lower() and stripped.startswith("[["):
+                        in_sideband = True
+                        continue
+
+                    if in_sideband and stripped.startswith("[["):
+                        in_sideband = False
+                        continue
+
+                    if in_sideband and re.match(r'^\s*(interface_)?enabled\s*=', stripped):
+                        if re.search(r'=\s*(yes|true|1)\s*$', stripped, re.IGNORECASE):
+                            sideband_enabled = True
+                        else:
+                            # It's disabled — enable it
+                            lines[i] = re.sub(
+                                r'(enabled\s*=\s*)(No|False|no|false|0)',
+                                r'\g<1>Yes',
+                                line
+                            )
+                            modified = True
+                            sideband_enabled = True
+                        in_sideband = False
+
+                if modified:
+                    with open(config_file, "w") as f:
+                        f.write("".join(lines))
+                    RNS.log(
+                        "Auto-enabled Sideband Hub for mesh connectivity",
+                        RNS.LOG_INFO
+                    )
+                    print("ℹ Auto-enabled Sideband Hub for mesh connectivity")
+
+            else:
+                # No Sideband Hub at all — append it
+                sideband_config = """
   # Phantom Mesh — Global connectivity via Sideband Hub
   [[Sideband Hub]]
     type = TCPClientInterface
@@ -287,17 +332,20 @@ class PhantomNetwork:
     target_host = sideband.connect.reticulum.network
     target_port = 7822
 """
-            with open(config_file, "a") as f:
-                f.write(sideband_config)
+                with open(config_file, "a") as f:
+                    f.write(sideband_config)
 
-            RNS.log(
-                "Added Sideband Hub to Reticulum config for mesh connectivity",
-                RNS.LOG_INFO
-            )
+                RNS.log(
+                    "Added Sideband Hub to Reticulum config for mesh connectivity",
+                    RNS.LOG_INFO
+                )
+                print("ℹ Added Sideband Hub interface for mesh connectivity")
 
-            # Disable AutoInterface to prevent IPv6 errors
-            with open(config_file, "r") as f:
-                content = f.read()
+                # Re-read for autointerface check
+                with open(config_file, "r") as f:
+                    content = f.read()
+
+            # Disable AutoInterface on Windows to prevent IPv6 errors
             self._disable_autointerface(config_file, content)
 
         except Exception as e:

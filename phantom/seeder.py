@@ -76,25 +76,18 @@ class WantAnnounceHandler:
 
     def received_announce(self, destination_hash, announced_identity, app_data):
         """Called by RNS when ANY announcement is received."""
-        # Debug: log ALL announces we receive
-        RNS.log(
-            f"[DEBUG] Announce received from {destination_hash.hex()[:16]}... "
-            f"app_data={'yes' if app_data else 'no'} "
-            f"({len(app_data) if app_data else 0} bytes)",
-            RNS.LOG_INFO
-        )
-
         if not app_data:
             return
 
         try:
             metadata = umsgpack.unpackb(app_data)
-            wanted_hash = metadata.get("ghost_hash", "")
 
-            RNS.log(
-                f"[DEBUG] Parsed ghost_hash: {wanted_hash[:16] if wanted_hash else 'none'}",
-                RNS.LOG_DEBUG
-            )
+            # Only process dict payloads (Phantom announces)
+            # Other RNS apps send int/list/str — ignore gracefully
+            if not isinstance(metadata, dict):
+                return
+
+            wanted_hash = metadata.get("ghost_hash", "")
 
             with self._lock:
                 seeder = self._seeders.get(wanted_hash)

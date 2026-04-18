@@ -391,6 +391,8 @@ class Leecher:
                     if app_data:
                         try:
                             metadata = umsgpack.unpackb(app_data)
+                            if not isinstance(metadata, dict):
+                                return
                             gh = metadata.get("ghost_hash", "")
                             if gh == self._target:
                                 if destination_hash not in active_peer_ids:
@@ -539,6 +541,9 @@ class Leecher:
                 if app_data:
                     try:
                         metadata = umsgpack.unpackb(app_data)
+                        # Only process dict payloads (Phantom announces)
+                        if not isinstance(metadata, dict):
+                            return
                         gh = metadata.get("ghost_hash", "")
                         if gh == self._target:
                             if destination_hash not in failed_dests:
