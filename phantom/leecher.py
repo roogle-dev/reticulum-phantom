@@ -152,19 +152,32 @@ class Leecher:
     def _download_worker(self):
         """Main download worker thread with multi-peer swarm support."""
         attempt = 0
+        # Persistent across retries — dests that failed to connect are
+        # skipped for hint-based discovery. The announce handler (which
+        # does NOT check this set) can still discover them if they come back.
+        failed_dests = set()
 
         while self._running:
             if not self._running:
                 return
 
             try:
-                # Step 1: Discover ALL seeders — no blacklisting, always try all
+                # Step 1: Discover seeders
                 self._set_state(self.STATE_DISCOVERING)
-                failed_dests = set()  # Fresh each cycle — never blacklist
                 seeder_dests = self._discover_seeders(
                     failed_dests=failed_dests
                 )
                 if not seeder_dests:
+                    if failed_dests:
+                        # All known dests failed — clear and retry after delay
+                        RNS.log(
+                            f"All {len(failed_dests)} known seeder(s) unreachable. "
+                            f"Waiting 30s before retrying...",
+                            RNS.LOG_WARNING
+                        )
+                        failed_dests.clear()
+                        time.sleep(30)
+                        continue
                     return
 
                 RNS.log(
@@ -177,11 +190,15 @@ class Leecher:
                 active_links = self._connect_to_seeders(seeder_dests, failed_dests)
 
                 if not active_links:
+                    # Add all attempted dests to failed set
+                    for d in seeder_dests:
+                        failed_dests.add(bytes(d) if not isinstance(d, bytes) else d)
                     RNS.log(
-                        "No seeders connected, retrying...",
+                        f"No seeders connected ({len(failed_dests)} failed). "
+                        f"Waiting for announce-based discovery...",
                         RNS.LOG_WARNING
                     )
-                    time.sleep(2)
+                    time.sleep(5)
                     continue
 
                 RNS.log(
