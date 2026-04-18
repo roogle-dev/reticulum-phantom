@@ -33,6 +33,7 @@ from phantom.network import PhantomNetwork
 from phantom.seeder import Seeder
 from phantom.leecher import Leecher
 from phantom import ui
+from phantom.tui import run_tui
 
 
 def main():
@@ -164,12 +165,23 @@ def main():
         default=None
     )
 
+    # ─── phantom tui ──────────────────────────────────────────────────────
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="Launch the interactive TUI dashboard"
+    )
+    tui_parser.add_argument(
+        "--rns-config",
+        help="Path to custom Reticulum config directory",
+        default=None
+    )
+
     # Parse arguments
     args = parser.parse_args()
 
     if not args.command:
-        ui.print_banner()
-        parser.print_help()
+        # No args → launch TUI
+        run_tui()
         return
 
     # Dispatch to command handler
@@ -188,6 +200,8 @@ def main():
             cmd_settings(args)
         elif args.command == "debug":
             cmd_debug(args)
+        elif args.command == "tui":
+            run_tui(getattr(args, 'rns_config', None))
     except KeyboardInterrupt:
         ui.console.print("\n[dim]Interrupted.[/dim]")
         sys.exit(0)
