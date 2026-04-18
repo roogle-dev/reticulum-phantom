@@ -639,7 +639,8 @@ def cmd_download(args):
     def on_progress(chunks_done, total, bytes_received):
         nonlocal task_id
         if task_id is not None:
-            progress.update(task_id, completed=chunks_done)
+            progress.update(task_id, completed=bytes_received,
+                           description=f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [{chunks_done}/{total}]")
 
     def on_state_change(state, info):
         nonlocal task_id
@@ -693,13 +694,14 @@ def cmd_download(args):
 
         if leecher.state == Leecher.STATE_DOWNLOADING:
             with progress:
+                file_size = leecher.ghost.file_size if leecher.ghost else leecher.total_chunks * 1024 * 1024
                 task_id = progress.add_task(
-                    f"Downloading {leecher.ghost.name if leecher.ghost else 'file'}",
-                    total=leecher.total_chunks
+                    f"Downloading {leecher.ghost.name if leecher.ghost else 'file'} [0/{leecher.total_chunks}]",
+                    total=file_size
                 )
                 while leecher.state == Leecher.STATE_DOWNLOADING:
                     time.sleep(0.3)
-                    progress.update(task_id, completed=leecher.chunks_received)
+                    progress.update(task_id, completed=leecher.bytes_received)
 
         # Wait for assembling/completion
         while leecher.state == Leecher.STATE_ASSEMBLING:
