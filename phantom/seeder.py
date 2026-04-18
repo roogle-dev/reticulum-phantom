@@ -93,8 +93,7 @@ class Seeder:
             RNS.Destination.IN,
             RNS.Destination.SINGLE,
             config.RNS_APP_NAME,
-            "swarm",
-            self.ghost.ghost_hash
+            "swarm"
         )
 
         # Register request handlers

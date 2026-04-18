@@ -308,14 +308,13 @@ class Leecher:
         RNS.log(f"Recalled seeder identity: {RNS.prettyhexrep(seeder_identity.hash)}", RNS.LOG_DEBUG)
 
         # Build the OUT destination matching the seeder's IN destination.
-        # This must use the EXACT same app_name and aspects as the seeder.
+        # Uses fixed aspects (no ghost_hash) — both sides agree on the hash.
         seeder_destination = RNS.Destination(
             seeder_identity,
             RNS.Destination.OUT,
             RNS.Destination.SINGLE,
             config.RNS_APP_NAME,
-            "swarm",
-            self.ghost_hash
+            "swarm"
         )
 
         # Verify the destination hash matches what we discovered
