@@ -33,7 +33,6 @@ from phantom.network import PhantomNetwork
 from phantom.seeder import Seeder
 from phantom.leecher import Leecher
 from phantom import ui
-from phantom.tui import run_tui
 
 
 def main():
@@ -197,8 +196,16 @@ def main():
     args = parser.parse_args()
 
     if not args.command:
-        # No args → launch TUI
-        run_tui()
+        # No args → launch TUI (lazy import)
+        try:
+            from phantom.tui import run_tui
+            run_tui()
+        except ImportError:
+            ui.print_banner()
+            ui.print_warning(
+                "TUI requires 'textual'. Install with: pip install textual"
+            )
+            parser.print_help()
         return
 
     # Dispatch to command handler
@@ -220,7 +227,14 @@ def main():
         elif args.command == "debug":
             cmd_debug(args)
         elif args.command == "tui":
-            run_tui(getattr(args, 'rns_config', None))
+            try:
+                from phantom.tui import run_tui
+                run_tui(getattr(args, 'rns_config', None))
+            except ImportError:
+                ui.print_error(
+                    "TUI requires 'textual'. Install with: pip install textual"
+                )
+                sys.exit(1)
     except KeyboardInterrupt:
         ui.console.print("\n[dim]Interrupted.[/dim]")
         sys.exit(0)
@@ -585,6 +599,12 @@ def cmd_download(args):
 
     # Create leecher
     leecher = Leecher(network, pid)
+
+    # Set output directory if specified
+    output_dir = getattr(args, 'output', None)
+    if output_dir:
+        leecher.output_dir = os.path.abspath(output_dir)
+        ui.print_info(f"Download folder: {leecher.output_dir}")
 
     # Set up progress display
     progress = ui.create_download_progress()

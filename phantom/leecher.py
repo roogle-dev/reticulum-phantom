@@ -77,6 +77,7 @@ class Leecher:
         self.on_state_change = None  # Called with (new_state, info)
         self.on_complete = None      # Called with (output_path)
         self.on_error = None         # Called with (error_message)
+        self.output_dir = None       # Custom output directory
 
     @property
     def state(self):
@@ -177,7 +178,11 @@ class Leecher:
 
             # Step 5: Assemble the file
             self._set_state(self.STATE_ASSEMBLING)
-            output_path = self.chunker.assemble()
+            output = None
+            if self.output_dir:
+                os.makedirs(self.output_dir, exist_ok=True)
+                output = os.path.join(self.output_dir, self.ghost.name)
+            output_path = self.chunker.assemble(output)
 
             if output_path:
                 self.end_time = time.time()
