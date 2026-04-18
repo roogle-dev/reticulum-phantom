@@ -32,20 +32,6 @@ from .ghost_file import GhostFile
 # Custom Widgets
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class PhantomBanner(Static):
-    """The ASCII art banner widget."""
-
-    BANNER = """[bold cyan]  ██████╗ ██╗  ██╗ █████╗ ███╗   ██╗████████╗ ██████╗ ███╗   ███╗
-  ██╔══██╗██║  ██║██╔══██╗████╗  ██║╚══██╔══╝██╔═══██╗████╗ ████║
-  ██████╔╝███████║███████║██╔██╗ ██║   ██║   ██║   ██║██╔████╔██║
-  ██╔═══╝ ██╔══██║██╔══██║██║╚██╗██║   ██║   ██║   ██║██║╚██╔╝██║
-  ██║     ██║  ██║██║  ██║██║ ╚████║   ██║   ╚██████╔╝██║ ╚═╝ ██║
-  ╚═╝     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝ ╚═╝     ╚═╝[/bold cyan]"""
-
-    def render(self):
-        return Text.from_markup(self.BANNER)
-
-
 class NetworkPanel(Static):
     """Displays network status with a pulsing indicator."""
 
@@ -67,11 +53,12 @@ class NetworkPanel(Static):
         up = self._stats.get("total_uploaded_human", "0 B")
         down = self._stats.get("total_downloaded_human", "0 B")
         active = self._stats.get("active_transfers", 0)
+        total = self._stats.get("total_transfers", 0)
 
         content = (
             f" {dot} [{status_color}]{status_text}[/{status_color}]\n"
             f" [bold cyan]↑[/bold cyan] {up}  [bold blue]↓[/bold blue] {down}\n"
-            f" [dim]Active: {active} transfers[/dim]"
+            f" [dim]Active: {active} / {total} transfers[/dim]"
         )
         return Text.from_markup(content)
 
@@ -98,7 +85,7 @@ class IdentityPanel(Static):
 
 
 class TransferRow(Static):
-    """A single transfer progress display."""
+    """A single transfer progress display — full width, no truncation."""
 
     def __init__(self, transfer, **kwargs):
         super().__init__(**kwargs)
@@ -110,36 +97,63 @@ class TransferRow(Static):
 
     def render(self):
         t = self._transfer
-        arrow = "[bold cyan]↑[/bold cyan]" if t.direction == "upload" else "[bold blue]↓[/bold blue]"
+
+        if t.direction == "upload":
+            arrow = "[bold cyan]↑ SEED[/bold cyan]"
+        else:
+            arrow = "[bold blue]↓ DOWN[/bold blue]"
 
         # Progress bar
         pct = t.progress * 100
-        bar_len = 20
+        bar_len = 30
         filled = int(bar_len * t.progress)
-        bar = "█" * filled + "░" * (bar_len - filled)
+        bar = "━" * filled + "[dim]━[/dim]" * (bar_len - filled)
 
         # State styling
         if t.state == "complete":
-            state_str = "[bold green]COMPLETE ✓[/bold green]"
+            state_str = "[bold green]✓ COMPLETE[/bold green]"
         elif t.state in ("failed", "cancelled", "stopped"):
-            state_str = f"[bold red]{t.state.upper()}[/bold red]"
+            err = t.error or t.state
+            state_str = f"[bold red]✗ {err[:40]}[/bold red]"
         elif t.state == "seeding":
-            state_str = f"[green]SEEDING[/green] P:{t.peers}"
+            state_str = f"[green]SEEDING[/green] [dim]Peers:[/dim] {t.peers}"
+        elif t.state == "discovering":
+            state_str = "[yellow]⏳ DISCOVERING...[/yellow]"
+        elif t.state == "connecting":
+            state_str = "[yellow]🔗 CONNECTING...[/yellow]"
+        elif t.state == "fetching_manifest":
+            state_str = "[yellow]📋 FETCHING MANIFEST...[/yellow]"
         elif t.state == "downloading":
             speed = GhostFile._human_size(t.speed) + "/s"
-            state_str = f"[cyan]{speed}[/cyan]"
+            state_str = f"[cyan]⚡ {speed}[/cyan]"
+        elif t.state == "assembling":
+            state_str = "[yellow]🔧 ASSEMBLING...[/yellow]"
         else:
             state_str = f"[yellow]{t.state.upper()}[/yellow]"
 
-        # Size
+        # Size info
         size_str = GhostFile._human_size(t.bytes_transferred)
-        chunks_str = f"{t.chunks_done}/{t.total_chunks}" if t.total_chunks else ""
+        chunks_str = ""
+        if t.total_chunks:
+            chunks_str = f"[dim]Chunks:[/dim] {t.chunks_done}/{t.total_chunks}"
 
-        name = t.name if len(t.name) <= 40 else t.name[:37] + "..."
+        # Destination hash
+        dest_str = ""
+        if t.destination_hash:
+            dest_str = f"\n   [dim]Dest: {t.destination_hash}[/dim]"
+
+        # Ghost hash
+        ghost_str = ""
+        if t.ghost_hash:
+            ghost_str = f"  [dim]Ghost: {t.ghost_hash[:16]}...[/dim]"
+
+        # Full name — no truncation
+        name = t.name or "Unknown"
 
         content = (
-            f" {arrow} {name}\n"
+            f" {arrow}  [bold]{name}[/bold]{ghost_str}\n"
             f"   [cyan]{bar}[/cyan] {pct:5.1f}%  {size_str}  {chunks_str}  {state_str}"
+            f"{dest_str}"
         )
         return Text.from_markup(content)
 
@@ -159,16 +173,10 @@ class PhantomTUI(App):
         background: $surface;
     }
 
-    #banner {
-        height: 7;
-        content-align: center middle;
-        margin: 0 0 1 0;
-    }
-
     #status-bar {
         layout: horizontal;
         height: 5;
-        margin: 0 1 1 1;
+        margin: 0 1 0 1;
     }
 
     #network-panel {
@@ -183,22 +191,24 @@ class PhantomTUI(App):
         padding: 0 1;
     }
 
+    #transfers-label {
+        margin: 1 1 0 1;
+        padding: 0;
+    }
+
     #transfers-container {
         height: 1fr;
+        min-height: 8;
         margin: 0 1;
         border: solid $primary;
         padding: 1;
         overflow-y: auto;
     }
 
-    #log-panel {
-        height: 12;
-        margin: 0 1 1 1;
-        border: solid $accent-darken-2;
-    }
-
     .transfer-row {
-        height: 3;
+        height: auto;
+        min-height: 3;
+        max-height: 5;
         margin: 0 0 1 0;
     }
 
@@ -217,6 +227,12 @@ class PhantomTUI(App):
         width: auto;
         min-width: 12;
         margin: 0 0 0 1;
+    }
+
+    #log-panel {
+        height: 10;
+        margin: 0 1 0 1;
+        border: solid $accent-darken-2;
     }
 
     #ghost-table {
@@ -260,7 +276,6 @@ class PhantomTUI(App):
         with TabbedContent():
             # ─── Dashboard Tab ───────────────────────────────────────
             with TabPane("Dashboard", id="tab-dashboard"):
-                yield PhantomBanner(id="banner")
 
                 with Horizontal(id="status-bar"):
                     yield NetworkPanel(id="network-panel")
@@ -269,6 +284,7 @@ class PhantomTUI(App):
                 yield Static(
                     " [bold]Active Transfers[/bold]  "
                     "[dim](S=Seed  D=Download  Q=Quit)[/dim]",
+                    id="transfers-label",
                 )
 
                 yield ScrollableContainer(
@@ -283,7 +299,7 @@ class PhantomTUI(App):
 
                 with Horizontal(id="input-bar"):
                     yield Input(
-                        placeholder="File path to seed, or destination hash to download...",
+                        placeholder="File path to seed, or destination hash / .ghost path to download...",
                         id="action-input",
                     )
                     yield Button("Seed", id="btn-seed", variant="success")
@@ -320,7 +336,7 @@ class PhantomTUI(App):
         self.engine.on_transfer_update = self._on_transfer_update
 
         # Set up periodic refresh
-        self._refresh_timer = self.set_interval(2.0, self._refresh_ui)
+        self._refresh_timer = self.set_interval(1.0, self._refresh_ui)
 
         # Initialize tables
         self._init_ghost_table()
@@ -448,7 +464,8 @@ class PhantomTUI(App):
         try:
             table = self.query_one("#ghost-table", DataTable)
             table.add_columns(
-                "File Name", "Size", "Chunks", "Ghost Hash", "Created"
+                "File Name", "Size", "Chunks", "Ghost Hash",
+                "Seeder Dest", "Created"
             )
             self._refresh_ghost_table()
         except Exception:
@@ -470,11 +487,18 @@ class PhantomTUI(App):
                 except Exception:
                     created = "Unknown"
 
+                seeder_dest = g.get("seeder_dest", "")
+                if seeder_dest:
+                    seeder_dest = seeder_dest[:16] + "..."
+                else:
+                    seeder_dest = "[not set]"
+
                 table.add_row(
                     g["name"],
                     g["size_human"],
                     str(g["chunks"]),
-                    g["ghost_hash"][:16] + "...",
+                    g["ghost_hash"],
+                    seeder_dest,
                     created,
                 )
         except Exception:
@@ -509,7 +533,7 @@ class PhantomTUI(App):
     def action_download(self):
         """Focus the input for downloading."""
         inp = self.query_one("#action-input", Input)
-        inp.placeholder = "Enter destination hash to download..."
+        inp.placeholder = "Enter destination hash or .ghost file path to download..."
         inp.focus()
         inp.value = ""
         inp._phantom_action = "download"
@@ -561,6 +585,11 @@ class PhantomTUI(App):
         else:
             # Auto-detect: if it looks like a hex hash, download; else seed
             if len(value) == 32 and all(c in '0123456789abcdef' for c in value.lower()):
+                self.run_worker(
+                    lambda: self.engine.download_file(value),
+                    thread=True,
+                )
+            elif value.endswith(config.GHOST_EXTENSION):
                 self.run_worker(
                     lambda: self.engine.download_file(value),
                     thread=True,

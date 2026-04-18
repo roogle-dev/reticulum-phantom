@@ -267,8 +267,28 @@ class PhantomEngine:
         with self._lock:
             self._transfers[tid] = transfer
 
+        # Detect if input is a .ghost file path
+        if os.path.isfile(destination_hash) or destination_hash.endswith(config.GHOST_EXTENSION):
+            ghost_path = os.path.abspath(destination_hash)
+            if os.path.isfile(ghost_path):
+                ghost = GhostFile.load(ghost_path)
+                if ghost:
+                    transfer.name = ghost.name
+                    transfer.ghost_hash = ghost.ghost_hash
+                    transfer.total_chunks = ghost.chunk_count
+                    self._add_log("info",
+                                  f"↓ Downloading: {ghost.name} via .ghost file")
+                    leecher.download_from_ghost(ghost_path)
+                    return tid
+                else:
+                    self._add_log("error", f"Invalid ghost file: {ghost_path}")
+                    return None
+            else:
+                self._add_log("error", f"Ghost file not found: {ghost_path}")
+                return None
+
         self._add_log("info",
-                       f"↓ Downloading: {destination_hash[:16]}...")
+                       f"↓ Downloading: {destination_hash}")
 
         leecher.download_from_hash(destination_hash)
         return tid
@@ -313,6 +333,7 @@ class PhantomEngine:
                         "size_human": GhostFile._human_size(ghost.file_size),
                         "chunks": ghost.chunk_count,
                         "ghost_hash": ghost.ghost_hash,
+                        "seeder_dest": ghost.seeder_dest or "",
                         "created_at": ghost.created_at,
                     })
 
