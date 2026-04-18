@@ -359,7 +359,8 @@ class Leecher:
                 pass
 
         # Strategy 2: If input_hash looks like a destination hash, try direct
-        if not dest_hash:
+        # Skip this if we have a ghost file — input_hash is a ghost_hash, not a dest
+        if not dest_hash and not self.ghost:
             try:
                 candidate = bytes.fromhex(input_hash)
                 if len(candidate) == 16 and candidate not in failed_dests:
