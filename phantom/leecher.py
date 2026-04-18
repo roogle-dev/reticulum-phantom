@@ -645,30 +645,41 @@ class Leecher:
             RNS.LOG_INFO
         )
 
-        # ── Primary: try all known seeder destinations ────────────
-        for hint_dest in hint_dests:
+        # ── Primary: try all known seeder destinations in parallel ──
+        def try_hint_dest(hint_dest):
+            """Try to resolve path to a hint dest."""
             if first_found.is_set():
-                break  # Already found one, no need to try more
-
+                return
             RNS.log(
                 f"Requesting path to seeder: "
                 f"{hint_dest.hex()[:16]}...",
                 RNS.LOG_INFO
             )
-            # Block up to 15s per dest (shorter since we try multiple)
             path_found = RNS.Transport.await_path(
-                hint_dest, timeout=15
+                hint_dest, timeout=5
             )
             if path_found:
                 with found_lock:
                     if hint_dest not in found_dests:
                         found_dests.append(hint_dest)
                         RNS.log(
-                            f"Seeder path resolved: "
-                            f"{RNS.prettyhexrep(hint_dest)}",
+                            f"Seeder responded: "
+                            f"{RNS.prettyhexrep(hint_dest)} "
+                            f"({len(found_dests)} total)",
                             RNS.LOG_INFO
                         )
                 first_found.set()
+
+        # Launch all hint dest checks in parallel
+        hint_threads = []
+        for hd in hint_dests:
+            t = threading.Thread(target=try_hint_dest, args=(hd,), daemon=True)
+            hint_threads.append(t)
+            t.start()
+
+        # Wait for threads to finish (max 6s)
+        for t in hint_threads:
+            t.join(timeout=6)
 
         # ── Fallback: wait for announce handler responses ─────────
         last_announce = time.time()
@@ -846,14 +857,23 @@ class Leecher:
                     "Link to seeder failed — connection rejected or dropped",
                     RNS.LOG_WARNING
                 )
+                # Invalidate stale cached path so next discovery checks network
+                try:
+                    RNS.Transport.mark_path_unknown_state(destination_hash)
+                except Exception:
+                    pass
                 return None
             time.sleep(0.5)
 
-        # Timeout
+        # Timeout — seeder is unreachable, invalidate stale path
         RNS.log(
             "Link establishment timed out — seeder unreachable",
             RNS.LOG_WARNING
         )
+        try:
+            RNS.Transport.mark_path_unknown_state(destination_hash)
+        except Exception:
+            pass
         return None
 
     def _fetch_manifest(self, link):
