@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Reticulum](https://img.shields.io/badge/Reticulum-Mesh_Network-purple.svg)](https://reticulum.network/)
-[![Version](https://img.shields.io/badge/v0.6.3-Stable-green.svg)](#roadmap)
+[![Version](https://img.shields.io/badge/v0.7.0-Stable-green.svg)](#roadmap)
 
 ---
 
@@ -28,6 +28,7 @@ Phantom lets you share files over [Reticulum](https://reticulum.network/) — a 
 - **🌍 Zero-config mesh** — Auto-connects to the global Reticulum mesh via Sideband Hub
 - **📋 Multi-seeder ghost files** — Like multi-tracker torrents, ghost files store all known seeders for resilience
 - **⏸️ Resume support** — Downloads pick up where they left off, with accurate progress tracking
+- **🔀 PEX (Peer Exchange)** — Seeders share their peer lists over encrypted Links, bypassing announce rate-limits
 
 ## Quick Start
 
@@ -246,12 +247,28 @@ The **ghost hash** (first 16 bytes of the file's SHA-256) is the unique identifi
 
 ### Discovery
 
-Phantom uses a **dual discovery strategy**:
+Phantom uses a **three-layer discovery strategy**:
 
 1. **Direct path resolution (fast)** — The .ghost file contains known seeder destinations. The leecher uses `await_path()` to resolve the path through the mesh — typically connects in 1-2 seconds
-2. **Announce-based discovery (fallback)** — Leecher broadcasts "I want ghost_hash X" as an RNS announce. Seeders listening for wants re-announce themselves. Works even when all known seeders are offline
-3. **Continuous discovery** — New seeders joining during download are automatically detected and added to the swarm
-4. **Auto-failover** — If a seeder dies mid-transfer, its chunks redistribute to remaining peers
+2. **PEX — Peer Exchange (primary)** — After connecting to ANY seeder, the leecher asks `"who else seeds this?"` over the encrypted Link. The seeder returns all known peers. This bypasses announce rate-limiting entirely because Links are never throttled
+3. **Announce-based discovery (fallback)** — Leecher broadcasts "I want ghost_hash X" as an RNS announce. Seeders listening for wants re-announce themselves. Used when no seeder dests are known
+4. **Continuous discovery** — During download, PEX runs every 30 seconds to find new peers joining the swarm
+5. **Auto-failover** — If a seeder dies mid-transfer, its chunks redistribute to remaining peers
+
+### PEX (Peer Exchange)
+
+```
+ Leecher connects to any seeder it knows (encrypted Link)
+     │
+     ├── link.request("peers")
+     │   └── Seeder responds: ["fd1bbf73...", "ab12cd34...", ...]
+     │
+     ├── Leecher connects to each peer directly
+     │   (no announces needed — Links are never rate-limited)
+     │
+     └── Every 30s during download: ask peers for MORE peers
+         (swarm grows organically)
+```
 
 ### Multi-Peer Swarm
 
@@ -264,8 +281,8 @@ Phantom uses a **dual discovery strategy**:
                              │   Transport  │              │ seeder │
  Seeder B                    │    Nodes     │              └───┬────┘
 ┌────────┐  announce         │   (Sideband) │                  │
-│ seed   ├──────────────────►│              │  5s discovery    │
-│ movie  │                   └──────────────┘  window          │
+│ seed   ├──────────────────►│              │  PEX + 5s        │
+│ movie  │                   └──────────────┘  discovery       │
 └────────┘                                                     │
                                                                │
      ┌─────────────────────────────────────────────────────────┤
@@ -286,8 +303,8 @@ Phantom uses a **dual discovery strategy**:
 
 1. **Identity** — Each node has a persistent X25519/Ed25519 keypair
 2. **Ghost File** — Metadata descriptor with per-chunk SHA-256 hashes + multi-seeder destinations
-3. **Seeder** — Creates a unique RNS destination per file, announces with `type: "seeder"` on the mesh
-4. **Leecher** — Discovers seeders via direct path + announce handler, filters by `type` to avoid leecher-to-leecher confusion
+3. **Seeder** — Creates a unique RNS destination per file, announces with `type: "seeder"`, serves chunks + PEX peer lists
+4. **Leecher** — Discovers seeders via direct path + PEX + announce handler, downloads chunks in parallel
 5. **Engine** — Thread-safe background manager for multiple concurrent seeders/leechers
 6. **TUI** — Interactive terminal dashboard built with Textual (optional)
 7. **Network** — Auto-configures Sideband Hub for global mesh connectivity, auto-disables AutoInterface on Windows
@@ -412,9 +429,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.3** — TUI dashboard: interactive terminal interface with Textual
 - [x] **v0.4** — Patient discovery: announce-based + direct path, auto-failover
 - [x] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders, continuous discovery
-- [x] **v0.6** — Global mesh: auto-config Sideband Hub, multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested *(current)*
-- [ ] **v0.7** — LXMF integration: offline chunk caching via propagation nodes
-- [ ] **v0.8** — DHT-like peer discovery and reputation system
+- [x] **v0.6** — Global mesh: auto-config Sideband Hub, multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested
+- [x] **v0.7** — PEX (Peer Exchange): seeders share peer lists over Links, bypassing announce rate-limits, bidirectional seeder discovery, stale path invalidation *(current)*
+- [ ] **v0.8** — LXMF integration: offline chunk caching via propagation nodes
+- [ ] **v0.9** — DHT-like peer discovery and reputation system
 
 ---
 
