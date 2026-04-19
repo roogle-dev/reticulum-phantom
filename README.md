@@ -431,6 +431,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
+## Community
+
+- 💬 **Matrix**: [#roogle-reticulum:matrix.org](https://matrix.to/#/#roogle-reticulum:matrix.org) — Roogle community chat
+- 🌐 **Roogle**: [roogle.us](https://roogle.us) — More free Reticulum services
+
+---
+
 <p align="center">
   <b>👻 Share files. Not metadata.</b>
 </p>
