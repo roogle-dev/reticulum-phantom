@@ -29,6 +29,8 @@ Phantom lets you share files over [Reticulum](https://reticulum.network/) — a 
 - **📋 Multi-seeder ghost files** — Like multi-tracker torrents, ghost files store all known seeders for resilience
 - **⏸️ Resume support** — Downloads pick up where they left off, with accurate progress tracking
 - **🔀 PEX (Peer Exchange)** — Seeders share their peer lists over encrypted Links, bypassing announce rate-limits
+- **🌱 Auto-seed** — After downloading, automatically start seeding to strengthen the swarm
+- **🛡️ Mesh-friendly** — Adaptive announce stagger prevents network spam, even with 1000+ files
 
 ## Quick Start
 
@@ -90,10 +92,10 @@ The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with 
 │                                                                 │
 │   3. Download: phantom download movie.mkv.ghost                 │
 │                → auto-discovers ALL seeders, downloads in swarm │
+│                → automatically starts seeding after completion  │
 │                                                                 │
-│   4. Re-seed:  phantom seed movie.mkv                           │
-│                → your dest is added to the ghost file           │
-│                → share YOUR ghost file — now has 2 seeders!     │
+│   4. Swarm grows organically — every downloader becomes a       │
+│      seeder, new peers discovered via PEX in real-time          │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
