@@ -1136,7 +1136,7 @@ class Leecher:
                 peers = pex_data.get("peers", [])
                 RNS.log(
                     f"PEX: received {len(peers)} peer(s) from seeder",
-                    RNS.LOG_INFO
+                    RNS.LOG_DEBUG
                 )
                 return peers
 

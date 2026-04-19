@@ -569,7 +569,7 @@ class Seeder:
 
         RNS.log(
             f"PEX: sharing {len(peers)} peer(s) for {self.ghost.ghost_hash[:16]}...",
-            RNS.LOG_INFO
+            RNS.LOG_DEBUG
         )
 
         return umsgpack.packb({"peers": list(peers)})
