@@ -80,17 +80,17 @@ The `.ghost` file is the Phantom equivalent of a `.torrent` file. Share it with 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                                                                 │
-│   1. Seed:     phantom seed movie.mkv                          │
+│   1. Seed:     phantom seed movie.mkv                           │
 │                → creates movie.mkv.ghost next to the file       │
 │                → announces on mesh, serves chunks               │
 │                                                                 │
 │   2. Share:    Send movie.mkv.ghost to your friend              │
-│                (email, USB, Discord, whatever)                   │
+│                (email, USB, Discord, whatever)                  │
 │                                                                 │
-│   3. Download: phantom download movie.mkv.ghost                │
+│   3. Download: phantom download movie.mkv.ghost                 │
 │                → auto-discovers ALL seeders, downloads in swarm │
 │                                                                 │
-│   4. Re-seed:  phantom seed movie.mkv                          │
+│   4. Re-seed:  phantom seed movie.mkv                           │
 │                → your dest is added to the ghost file           │
 │                → share YOUR ghost file — now has 2 seeders!     │
 │                                                                 │
