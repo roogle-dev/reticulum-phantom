@@ -36,8 +36,9 @@ DEFAULT_DISCOVERY_WINDOW = 5      # seconds to collect seeders (more join during
 MAX_SWARM_PEERS = 5               # max simultaneous peer connections
 
 # Reverse discovery: leecher announces "I want X", seeders respond
-# Only runs during active discovery (fallback when ghost file dests fail)
-WANT_ANNOUNCE_INTERVAL = 30       # seconds between want re-announces
+# With PEX handling primary peer discovery, this is only a fallback.
+# Must stay above Hub's announce_rate_target (typically 60-120s).
+WANT_ANNOUNCE_INTERVAL = 120       # seconds between want re-announces
 
 # TCP/IP defaults for initial transport
 DEFAULT_TCP_HOST = "0.0.0.0"
