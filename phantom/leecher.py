@@ -306,6 +306,7 @@ class Leecher:
 
                 if output_path:
                     self.end_time = time.time()
+                    self.completed_file_path = output_path
                     self._set_state(self.STATE_COMPLETE, output_path)
                     self.chunker.cleanup()
 

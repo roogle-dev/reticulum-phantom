@@ -942,6 +942,34 @@ def cmd_download(args):
     except KeyboardInterrupt:
         leecher.cancel()
         ui.print_info("Download cancelled.")
+        return
+
+    # Auto-seed after download completes
+    if leecher.state == Leecher.STATE_COMPLETE and leecher.ghost:
+        settings = config.load_settings()
+        if settings.get("auto_seed_after_download", True):
+            file_path = getattr(leecher, 'completed_file_path', None)
+            ghost_file = leecher.ghost
+
+            if file_path and os.path.isfile(file_path):
+                ui.print_info("")
+                ui.print_info("🌱 Auto-seeding — you are now helping others download!")
+                ui.print_info("   Press Ctrl+C to stop seeding.")
+
+                from .seeder import Seeder
+                seeder = Seeder(ghost_file, network, pid)
+
+                try:
+                    seeder.start(file_path)
+                    dest_hex = seeder._destination.hash.hex() if seeder._destination else "?"
+                    ui.print_info(f"   ↑ {ghost_file.name} | dest:{dest_hex}")
+
+                    # Block until Ctrl+C
+                    while seeder._running:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    seeder.stop()
+                    ui.print_info("Seeding stopped.")
 
 
 def cmd_settings(args):
