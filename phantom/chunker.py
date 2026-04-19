@@ -151,7 +151,10 @@ class Chunker:
             with open(chunk_path, "wb") as f:
                 f.write(data)
             return True
-        except IOError as e:
+        except OSError as e:
+            if e.errno == 28:  # ENOSPC — No space left on device
+                RNS.log(f"DISK FULL: Cannot save chunk {index}", RNS.LOG_ERROR)
+                raise  # Let caller handle it
             RNS.log(f"Error saving chunk {index}: {e}", RNS.LOG_ERROR)
             return False
 

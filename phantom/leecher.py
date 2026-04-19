@@ -433,6 +433,14 @@ class Leecher:
                         all_done.set()
                         break
                 else:
+                    # Check if disk is full — abort immediately
+                    if getattr(self, '_disk_full', False):
+                        RNS.log(
+                            f"Peer {peer_hex}... stopping: disk full",
+                            RNS.LOG_ERROR
+                        )
+                        all_done.set()
+                        break
                     # Failed — put chunk back for another peer
                     chunk_queue.put(chunk_index)
                     RNS.log(
@@ -1215,31 +1223,39 @@ class Leecher:
                 return False
 
             # Save and verify
-            if self.chunker.save_chunk(chunk_index, data):
-                self.chunks_received += 1
-                self.bytes_received += len(data)
+            try:
+                if self.chunker.save_chunk(chunk_index, data):
+                    self.chunks_received += 1
+                    self.bytes_received += len(data)
 
-                RNS.log(
-                    f"Chunk {chunk_index + 1}/{self.total_chunks} "
-                    f"received ({len(data)} bytes) "
-                    f"[{self.progress * 100:.1f}%]",
-                    RNS.LOG_DEBUG
-                )
+                    RNS.log(
+                        f"Chunk {chunk_index + 1}/{self.total_chunks} "
+                        f"received ({len(data)} bytes) "
+                        f"[{self.progress * 100:.1f}%]",
+                        RNS.LOG_DEBUG
+                    )
 
-                # Notify progress callback
-                if self.on_progress:
-                    try:
-                        self.on_progress(
-                            self.chunks_received,
-                            self.total_chunks,
-                            self.bytes_received
-                        )
-                    except Exception:
-                        pass
+                    # Notify progress callback
+                    if self.on_progress:
+                        try:
+                            self.on_progress(
+                                self.chunks_received,
+                                self.total_chunks,
+                                self.bytes_received
+                            )
+                        except Exception:
+                            pass
 
-                return True
-            else:
-                return False
+                    return True
+                else:
+                    return False
+            except OSError as e:
+                if e.errno == 28:  # ENOSPC
+                    self._disk_full = True
+                    self._fail("No space left on device — download paused at "
+                               f"{self.chunks_received}/{self.total_chunks} chunks")
+                    return False
+                raise
 
         except Exception as e:
             RNS.log(f"Failed to parse chunk response: {e}",
