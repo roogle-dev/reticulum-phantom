@@ -236,6 +236,12 @@ class Seeder:
             allow=RNS.Destination.ALLOW_ALL
         )
 
+        self._destination.register_request_handler(
+            "peers",
+            response_generator=self._handle_peers_request,
+            allow=RNS.Destination.ALLOW_ALL
+        )
+
         # Set up link callbacks
         self._destination.set_link_established_callback(
             self._on_link_established
@@ -539,6 +545,34 @@ class Seeder:
         }
 
         return umsgpack.packb(status)
+
+    def _handle_peers_request(self, path, data, request_id,
+                               link_id, remote_identity, requested_at):
+        """
+        Handle PEX (Peer Exchange) request — return all known seeder
+        destinations for this ghost hash.
+
+        This lets a leecher discover the full swarm through any single
+        connection, completely bypassing announce rate-limiting.
+        """
+        peers = set(self.ghost.seeder_dests)
+
+        # Add our own dest
+        if self._destination:
+            peers.add(self._destination.hash.hex())
+
+        # Add live seeders for this ghost hash from WantAnnounceHandler
+        with WantAnnounceHandler._lock:
+            for gh, seeder in WantAnnounceHandler._seeders.items():
+                if gh == self.ghost.ghost_hash and seeder._destination:
+                    peers.add(seeder._destination.hash.hex())
+
+        RNS.log(
+            f"PEX: sharing {len(peers)} peer(s) for {self.ghost.ghost_hash[:16]}...",
+            RNS.LOG_INFO
+        )
+
+        return umsgpack.packb({"peers": list(peers)})
 
     def get_stats(self):
         """Get seeder statistics for display."""

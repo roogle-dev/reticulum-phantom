@@ -227,31 +227,50 @@ class Leecher:
                         RNS.LOG_WARNING
                     )
 
-                # Connect to additional seeders we learned about (from manifest or local ghost)
+                # Step 3.5: PEX — ask connected seeder(s) for all known peers
+                already_connected = {dh for dh, _ in active_links}
+                pex_dests = set()
+
+                for dh, lk in active_links:
+                    try:
+                        pex_peers = self._request_peers(lk)
+                        if pex_peers:
+                            for dest_hex in pex_peers:
+                                try:
+                                    dest_bytes = bytes.fromhex(dest_hex)
+                                    if (len(dest_bytes) == 16
+                                            and dest_bytes not in already_connected
+                                            and dest_bytes not in failed_dests):
+                                        pex_dests.add(dest_bytes)
+                                except (ValueError, Exception):
+                                    pass
+                    except Exception:
+                        pass
+
+                # Also check ghost file for any dests PEX missed
                 if self.ghost and self.ghost.seeder_dests:
-                    new_dests = []
-                    already_connected = {dh for dh, _ in active_links}
                     for dest_hex in self.ghost.seeder_dests:
                         try:
                             dest_bytes = bytes.fromhex(dest_hex)
                             if (len(dest_bytes) == 16
                                     and dest_bytes not in already_connected
-                                    and dest_bytes not in failed_dests):
-                                new_dests.append(dest_bytes)
+                                    and dest_bytes not in failed_dests
+                                    and dest_bytes not in pex_dests):
+                                pex_dests.add(dest_bytes)
                         except (ValueError, Exception):
                             pass
 
-                    if new_dests:
-                        RNS.log(
-                            f"Swarm has {len(new_dests)} additional seeder(s), connecting...",
-                            RNS.LOG_INFO
-                        )
-                        extra_links = self._connect_to_seeders(new_dests, failed_dests)
-                        active_links.extend(extra_links)
-                        RNS.log(
-                            f"Swarm: {len(active_links)} total peer(s) connected",
-                            RNS.LOG_INFO
-                        )
+                if pex_dests:
+                    RNS.log(
+                        f"PEX: discovered {len(pex_dests)} additional peer(s), connecting...",
+                        RNS.LOG_INFO
+                    )
+                    extra_links = self._connect_to_seeders(list(pex_dests), failed_dests)
+                    active_links.extend(extra_links)
+                    RNS.log(
+                        f"Swarm: {len(active_links)} total peer(s) connected",
+                        RNS.LOG_INFO
+                    )
 
                 # Step 4: Download chunks from ALL peers
                 self._set_state(self.STATE_DOWNLOADING)
@@ -514,38 +533,64 @@ class Leecher:
                 except Exception:
                     pass
 
-                # Also try known dests from ghost file that we haven't connected to
+                # PEX: ask all connected peers for their peer lists
+                pex_new_dests = set()
+
+                # Collect dests from active peer links via PEX
+                for pdh in list(active_peer_ids):
+                    if all_done.is_set():
+                        break
+                    # Find the link for this peer in the workers list
+                    for dh, lk in active_links:
+                        if dh == pdh:
+                            try:
+                                pex_peers = self._request_peers(lk)
+                                for dest_hex in pex_peers:
+                                    try:
+                                        dest_bytes = bytes.fromhex(dest_hex)
+                                        if (len(dest_bytes) == 16
+                                                and dest_bytes not in active_peer_ids):
+                                            pex_new_dests.add(dest_bytes)
+                                    except (ValueError, Exception):
+                                        pass
+                            except Exception:
+                                pass
+                            break
+
+                # Also check ghost file for any dests PEX missed
                 if self.ghost and self.ghost.seeder_dests:
                     for dest_hex in list(self.ghost.seeder_dests):
-                        if all_done.is_set():
-                            break
                         try:
                             dest_bytes = bytes.fromhex(dest_hex)
-                            if dest_bytes in active_peer_ids:
-                                continue  # Already connected
-                            # Try to find path to this seeder
-                            path_found = RNS.Transport.await_path(
-                                dest_bytes, timeout=3
-                            )
-                            if path_found:
-                                new_link = self._connect_to_seeder(dest_bytes)
-                                if new_link:
-                                    active_peer_ids.add(dest_bytes)
-                                    peer_id = len(workers)
-                                    t = threading.Thread(
-                                        target=peer_worker,
-                                        args=(dest_bytes, new_link, peer_id),
-                                        daemon=True
-                                    )
-                                    workers.append(t)
-                                    t.start()
-                                    RNS.log(
-                                        f"New peer from manifest joined! "
-                                        f"Now {len(active_peer_ids)} peer(s)",
-                                        RNS.LOG_INFO
-                                    )
-                        except Exception:
+                            if (len(dest_bytes) == 16
+                                    and dest_bytes not in active_peer_ids):
+                                pex_new_dests.add(dest_bytes)
+                        except (ValueError, Exception):
                             pass
+
+                # Try connecting to any new dests we found
+                for dest_bytes in pex_new_dests:
+                    if all_done.is_set():
+                        break
+                    try:
+                        new_link = self._connect_to_seeder(dest_bytes)
+                        if new_link:
+                            active_peer_ids.add(dest_bytes)
+                            peer_id = len(workers)
+                            t = threading.Thread(
+                                target=peer_worker,
+                                args=(dest_bytes, new_link, peer_id),
+                                daemon=True
+                            )
+                            workers.append(t)
+                            t.start()
+                            RNS.log(
+                                f"PEX: new peer joined mid-download! "
+                                f"Now {len(active_peer_ids)} peer(s)",
+                                RNS.LOG_INFO
+                            )
+                    except Exception:
+                        pass
 
                 # Wait before next cycle
                 for _ in range(config.WANT_ANNOUNCE_INTERVAL):
@@ -1054,6 +1099,51 @@ class Leecher:
             self._fail(f"Failed to parse manifest: {e}")
             return False
 
+
+    def _request_peers(self, link):
+        """
+        PEX (Peer Exchange) — ask a connected seeder for all known peers.
+
+        Uses the existing encrypted Link, so this is NOT subject to
+        announce rate-limiting. Returns a list of dest hex strings.
+        """
+        response_event = threading.Event()
+        response_data = [None]
+
+        def on_response(receipt):
+            try:
+                response_data[0] = receipt.response
+            except Exception:
+                pass
+            response_event.set()
+
+        def on_failed(receipt):
+            response_event.set()
+
+        try:
+            link.request(
+                "peers",
+                data=None,
+                response_callback=on_response,
+                failed_callback=on_failed,
+                timeout=10
+            )
+
+            response_event.wait(timeout=15)
+
+            if response_data[0]:
+                pex_data = umsgpack.unpackb(response_data[0])
+                peers = pex_data.get("peers", [])
+                RNS.log(
+                    f"PEX: received {len(peers)} peer(s) from seeder",
+                    RNS.LOG_INFO
+                )
+                return peers
+
+        except Exception as e:
+            RNS.log(f"PEX request failed: {e}", RNS.LOG_DEBUG)
+
+        return []
 
 
     def _download_single_chunk(self, link, chunk_index):
