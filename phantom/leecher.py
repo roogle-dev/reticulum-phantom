@@ -577,6 +577,7 @@ class Leecher:
                         new_link = self._connect_to_seeder(dest_bytes)
                         if new_link:
                             active_peer_ids.add(dest_bytes)
+                            active_links.append((dest_bytes, new_link))
                             peer_id = len(workers)
                             t = threading.Thread(
                                 target=peer_worker,
