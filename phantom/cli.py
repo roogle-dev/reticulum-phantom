@@ -664,7 +664,13 @@ def cmd_seed_all(args):
                     ghost.save()
 
             seeder = Seeder(ghost, source_path, network, pid)
-            stagger = len(seeders) * config.ANNOUNCE_STAGGER_PER_FILE
+            # Adaptive stagger: scale up for large libraries to be mesh-friendly
+            file_count = len(seeders) + 1
+            if file_count > 50:
+                per_file = config.ANNOUNCE_STAGGER_MAX
+            else:
+                per_file = config.ANNOUNCE_STAGGER_PER_FILE
+            stagger = len(seeders) * per_file
             seeder.start(announce_delay=stagger)
             seeders.append(seeder)
 

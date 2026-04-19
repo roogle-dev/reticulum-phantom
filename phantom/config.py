@@ -29,6 +29,7 @@ MAX_CHUNK_SIZE = 16_777_216       # 16 MB
 
 DEFAULT_ANNOUNCE_INTERVAL = 600      # 10 min — seeder heartbeat (path keepalive only, PEX handles discovery)
 ANNOUNCE_STAGGER_PER_FILE = 2     # seconds between each file's initial announce in seed-all
+ANNOUNCE_STAGGER_MAX = 5          # max seconds between announces (for large libraries)
 DEFAULT_TRANSFER_TIMEOUT = 120    # seconds (for data transfers)
 DEFAULT_LINK_TIMEOUT = 10         # seconds (for link establishment — fast failover)
 DEFAULT_PATH_TIMEOUT = 30         # seconds
