@@ -478,8 +478,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.6** — Global mesh: multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested
 - [x] **v0.7** — PEX (Peer Exchange): seeders share peer lists over Links, bypassing announce rate-limits, bidirectional seeder discovery, stale path invalidation
 - [x] **v0.8** — Decentralization fix: removed config modification, removed hardcoded entrypoints, 3h seeder heartbeat, exponential backoff on wants, mesh etiquette docs *(current)*
-- [ ] **v0.9** — LXMF integration: offline chunk caching via propagation nodes
-- [ ] **v1.0** — DHT-like peer discovery and reputation system
+- [ ] **v0.9** — Bandwidth-aware chunking: adaptive chunk sizes for low-bandwidth links (LoRa, packet radio)
+- [ ] **v1.0** — Stable release: comprehensive test suite, packaging, documentation
 
 ---
 
