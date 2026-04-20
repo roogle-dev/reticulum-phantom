@@ -340,6 +340,37 @@ If no interfaces are configured, Phantom will display a helpful setup guide poin
 
 ---
 
+## Mesh Etiquette
+
+Reticulum is a shared mesh network. Transport nodes enforce announce rate-limiting, so Phantom is designed to minimize announce traffic.
+
+### Announce Budget
+
+| Scenario | Announce Rate | Status |
+|----------|--------------|--------|
+| Seeding 1 file | 1 per 3 hours | Safe |
+| Seeding 10 files | 1 per 18 minutes | Safe |
+| Seeding 50 files | 1 per 3.6 minutes | Safe |
+| Seeding 100 files | 1 per 108 seconds | Safe (above rate target) |
+| Downloading 1 file | 1x initial want, then 1 per 120s until seeder found | Safe |
+
+### How Phantom Discovers Peers
+
+Phantom uses a 3-layer discovery hierarchy, ordered by mesh cost:
+
+1. **Direct path resolution** (zero announce cost): Ghost files contain seeder destinations. The leecher resolves paths directly.
+2. **PEX over encrypted Links** (zero announce cost): Connected peers exchange peer lists. Links are point-to-point and never rate-limited.
+3. **Announce-based discovery** (fallback only): A single "want" broadcast, repeated every 120s only while no seeder has responded. Stops as soon as one connects.
+
+### What Phantom Never Does
+
+- Never modifies your Reticulum configuration
+- Never re-announces in response to leecher wants (uses path requests instead)
+- Never announces during an active download (PEX handles it)
+- Never announces more frequently than every 120 seconds per destination
+
+---
+
 ## Settings
 
 View and modify settings:
