@@ -2,7 +2,7 @@
 
 A step-by-step guide to test P2P file sharing across the internet or LAN using the Reticulum mesh.
 
-> **v0.6.3** — Phantom auto-configures mesh connectivity. No manual Reticulum config needed!
+> **v0.8.0** — Phantom respects your Reticulum configuration. Configure your own interfaces for mesh connectivity.
 
 ---
 
@@ -18,11 +18,20 @@ cd reticulum-phantom
 pip install -r requirements.txt
 ```
 
+### Configure Reticulum Interfaces
+
+Before using Phantom, you need at least one Reticulum interface configured. Phantom never modifies your Reticulum config — you are in control.
+
+Find interface definitions at:
+- **[Reticulum Getting Started](https://markqvist.github.io/Reticulum/manual/gettingstartedfast.html)** — Official configuration guide
+- **[directory.rns.recipes](https://directory.rns.recipes)** — Community interface directory
+- **[rmap.world](https://rmap.world)** — Network map of active nodes
+
+Edit `~/.reticulum/config` (or `%USERPROFILE%\.reticulum\config` on Windows) to add your interfaces.
+
 ---
 
 ## Quick Test: 2 PCs Over the Internet
-
-Phantom auto-enables the [Sideband Hub](https://unsigned.io/sideband/) on first run — giving you instant global mesh connectivity with zero configuration.
 
 ### PC-A (Seeder)
 
@@ -102,26 +111,26 @@ python phantom.py download movie.mkv.ghost
 
 ## Verifying Mesh Connectivity
 
-### Check Sideband Hub is Enabled
+### Check Your Interfaces
 
 ```bash
 # Linux/Mac
-cat ~/.reticulum/config | grep -A2 "Sideband"
+cat ~/.reticulum/config
 
 # Windows (PowerShell)
-type $env:USERPROFILE\.reticulum\config | Select-String "enabled|Sideband"
+type $env:USERPROFILE\.reticulum\config
 ```
 
-You should see:
+You should see at least one enabled interface, for example:
 ```ini
-[[Sideband Hub]]
+[[My Transport Node]]
     type = TCPClientInterface
     enabled = Yes
-    target_host = sideband.connect.reticulum.network
-    target_port = 7822
+    target_host = your.transport.node
+    target_port = 4242
 ```
 
-> Phantom auto-enables this on first run. If it's `enabled = No`, just change it to `Yes` and restart.
+> If no interfaces are configured, Phantom will display a setup guide pointing to the Reticulum documentation and interface directories.
 
 ### Test Path Resolution
 
@@ -132,14 +141,14 @@ rnpath <destination_hash> -w 10
 
 Expected output:
 ```
-Path found, destination <138e6b9ca155dd6f...> is 2 hops away via <521c87a8...> on TCPInterface[Sideband Hub]
+Path found, destination <138e6b9ca155dd6f...> is 2 hops away via <521c87a8...>
 ```
 
 ---
 
 ## LAN Testing (Optional)
 
-If you want to test on a local network without the Sideband Hub:
+If you want to test on a local network:
 
 ### PC-A: Add a TCP Server
 
@@ -206,12 +215,12 @@ This shows interface discovery, announce propagation, path requests, link establ
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| `Link establishment timed out` | Sideband Hub disabled | Check `~/.reticulum/config` — set `enabled = Yes` under `[[Sideband Hub]]` |
+| `Link establishment timed out` | No enabled interfaces or no path | Check `~/.reticulum/config` — ensure at least one interface is enabled |
 | Seeder found instantly but link fails | Stale cached path | Restart the seeder, wait 10s, retry download |
 | `Destination hash mismatch` | Leecher found another leecher, not a seeder | Update to v0.6.2+ (type filtering fix) |
 | Progress shows 1% with 600+ chunks done | Stale progress bar code | Update to v0.6.3 (progress fix) |
 | Speed shows 500+ MB/s | Cached chunks counted as transfer | Update to v0.6.3 (speed fix) |
-| `WinError 10038` socket error | Sideband Hub TCP dropped | Usually auto-reconnects. Restart if persistent |
+| `WinError 10038` socket error | TCP connection dropped | Usually auto-reconnects. Restart if persistent |
 | No seeders found | Ghost file missing `seeder_dest` | Re-generate ghost file from seeder, or wait for announce discovery (~1-2 min) |
 
 ---
@@ -219,25 +228,25 @@ This shows interface discovery, announce propagation, path requests, link establ
 ## Architecture Diagram
 
 ```
-  PC-A (Seeder)                      Sideband Hub                     PC-B (Leecher)
- ┌──────────────┐                  ┌──────────────┐                 ┌──────────────┐
- │ phantom seed │   TCP :7822      │  reticulum   │    TCP :7822    │   phantom    │
- │  movie.mkv   │◄────────────────►│  .network    │◄──────────────►│  download    │
- │              │                  │  (relay)     │                 │  movie.ghost │
- │  announces:  │                  └──────────────┘                 │              │
- │  type=seeder │                                                   │  discovers:  │
- │  ghost_hash  │ ◄──── E2E encrypted link (X25519) ─────────────► │  await_path  │
- └──────────────┘       chunks + verify + assemble                  └──────────────┘
-       ↕                                                                   ↕
- ┌──────────────┐                                                   ┌──────────────┐
- │  .ghost file │  ──── shared via email/USB/Discord ────────────►  │  .ghost file │
- │  seeder_dests│                                                   │  hint_dests  │
- └──────────────┘                                                   └──────────────┘
+  PC-A (Seeder)                   Transport Nodes                   PC-B (Leecher)
+ ┌──────────────┐                ┌──────────────┐                 ┌──────────────┐
+ │ phantom seed │   TCP/LoRa     │  reticulum   │   TCP/LoRa      │   phantom    │
+ │  movie.mkv   │◄──────────────►│  transport   │◄──────────────►│  download    │
+ │              │                │  relays      │                 │  movie.ghost │
+ │  announces:  │                └──────────────┘                 │              │
+ │  type=seeder │                                                 │  discovers:  │
+ │  ghost_hash  │ ◄──── E2E encrypted link (X25519) ───────────► │  await_path  │
+ └──────────────┘       chunks + verify + assemble                └──────────────┘
+       ↕                                                                 ↕
+ ┌──────────────┐                                                 ┌──────────────┐
+ │  .ghost file │  ──── shared via email/USB/Discord ──────────►  │  .ghost file │
+ │  seeder_dests│                                                 │  hint_dests  │
+ └──────────────┘                                                 └──────────────┘
 ```
 
 ### Key Points
 
-- **Sideband Hub** is a public Reticulum relay — it routes packets but **cannot read content** (E2E encrypted)
+- **Transport nodes** are community-run Reticulum relays — they route packets but **cannot read content** (E2E encrypted)
 - **Ghost files** contain seeder destinations for fast discovery (like multi-tracker torrents)
 - **Announce type filtering** ensures leechers only connect to actual seeders, not other leechers
 - **Auto-failover** redistributes chunks when a seeder drops mid-transfer

@@ -277,6 +277,36 @@ def print_warning(message):
     console.print(f"[bold yellow]⚠[/bold yellow] {message}")
 
 
+def print_no_connectivity(status=None):
+    """
+    Display a prominent connectivity guidance panel.
+
+    Shown when no Reticulum interfaces are configured.
+    Points users to official resources for configuring interfaces.
+    Phantom never modifies the user's config — this is guidance only.
+    """
+    from . import config as cfg
+
+    content = (
+        "[bold yellow]⚠ No Reticulum Network Interfaces Configured[/bold yellow]\n\n"
+        "Phantom needs at least one active Reticulum interface to\n"
+        "reach the mesh. Configure your interfaces using:\n\n"
+        f"  [bold cyan]1.[/bold cyan] Reticulum docs:  [link={cfg.RETICULUM_DOCS_URL}]{cfg.RETICULUM_DOCS_URL}[/link]\n"
+        f"  [bold cyan]2.[/bold cyan] Interface list:  [link={cfg.INTERFACE_DIRECTORY_URL}]{cfg.INTERFACE_DIRECTORY_URL}[/link]\n"
+        f"  [bold cyan]3.[/bold cyan] Network map:     [link={cfg.RMAP_URL}]{cfg.RMAP_URL}[/link]\n\n"
+        "[dim]Edit ~/.reticulum/config to add interfaces, then restart Phantom.\n"
+        "Phantom respects your Reticulum configuration and never modifies it.[/dim]"
+    )
+
+    panel = Panel(
+        content,
+        title="[bold white]📡 Network Setup Required[/bold white]",
+        border_style="yellow",
+        padding=(1, 2),
+    )
+    console.print(panel)
+
+
 def _format_duration(seconds):
     """Format seconds into human-readable duration."""
     if seconds < 60:

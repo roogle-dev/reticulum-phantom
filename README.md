@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Reticulum](https://img.shields.io/badge/Reticulum-Mesh_Network-purple.svg)](https://reticulum.network/)
-[![Version](https://img.shields.io/badge/v0.7.0-Stable-green.svg)](#roadmap)
+[![Version](https://img.shields.io/badge/v0.8.0-Stable-green.svg)](#roadmap)
 
 ---
 
@@ -25,7 +25,7 @@ Phantom lets you share files over [Reticulum](https://reticulum.network/) — a 
 - **🖥️ Interactive TUI** — Full-screen terminal dashboard (optional)
 - **🐝 Multi-peer swarm** — Download from multiple seeders simultaneously
 - **🔄 Auto-failover** — If a seeder goes offline, others pick up instantly
-- **🌍 Zero-config mesh** — Auto-connects to the global Reticulum mesh via Sideband Hub
+- **🌍 Respects your config** — Never modifies your Reticulum configuration; you control your own interfaces
 - **📋 Multi-seeder ghost files** — Like multi-tracker torrents, ghost files store all known seeders for resilience
 - **⏸️ Resume support** — Downloads pick up where they left off, with accurate progress tracking
 - **🔀 PEX (Peer Exchange)** — Seeders share their peer lists over encrypted Links, bypassing announce rate-limits
@@ -62,7 +62,7 @@ python phantom.py seed movie.mkv
 # 2. Share the .ghost file with your friend (email, USB, Discord, etc.)
 ```
 
-That's it. `seed` auto-creates your identity, the ghost file, and connects to the global mesh.
+That's it. `seed` auto-creates your identity and the ghost file. Configure your Reticulum interfaces to connect to the mesh.
 
 ### Download a File
 
@@ -282,7 +282,7 @@ Phantom uses a **three-layer discovery strategy**:
 └────────┘                   ┌──────────────┐              │ type=  │
                              │   Transport  │              │ seeder │
  Seeder B                    │    Nodes     │              └───┬────┘
-┌────────┐  announce         │   (Sideband) │                  │
+┌────────┐  announce         │   Transport  │                  │
 │ seed   ├──────────────────►│              │  PEX + 5s        │
 │ movie  │                   └──────────────┘  discovery       │
 └────────┘                                                     │
@@ -309,26 +309,34 @@ Phantom uses a **three-layer discovery strategy**:
 4. **Leecher** — Discovers seeders via direct path + PEX + announce handler, downloads chunks in parallel
 5. **Engine** — Thread-safe background manager for multiple concurrent seeders/leechers
 6. **TUI** — Interactive terminal dashboard built with Textual (optional)
-7. **Network** — Auto-configures Sideband Hub for global mesh connectivity, auto-disables AutoInterface on Windows
+7. **Network** — Read-only connectivity check with guidance to official Reticulum docs; never modifies user config
 
 ---
 
 ## Network Configuration
 
-Phantom **auto-configures** the [Sideband Hub](https://unsigned.io/sideband/) on first run for instant global mesh connectivity. No manual setup needed!
+Phantom **respects your Reticulum configuration** and never modifies it. You are in full control of your network interfaces, following [Reticulum's decentralized design philosophy](https://markqvist.github.io/Reticulum/manual/gettingstartedfast.html).
 
-If you want to customize your Reticulum config (`~/.reticulum/config`):
+To connect to the mesh, configure one or more interfaces in your Reticulum config (`~/.reticulum/config`):
 
 ```ini
-# Already auto-added by Phantom:
-[[Sideband Hub]]
+# Example: connect to a community transport node
+[[My Transport Node]]
     type = TCPClientInterface
     enabled = yes
-    target_host = sideband.connect.reticulum.network
-    target_port = 7822
+    target_host = your.transport.node
+    target_port = 4242
 ```
 
-See the [Reticulum documentation](https://markqvist.github.io/Reticulum/manual/) for full networking configuration.
+### Finding Interfaces
+
+- **[Reticulum Getting Started](https://markqvist.github.io/Reticulum/manual/gettingstartedfast.html)** — Official configuration guide
+- **[directory.rns.recipes](https://directory.rns.recipes)** — Community interface directory
+- **[rmap.world](https://rmap.world)** — Network map of active nodes
+
+> **Tip:** It's best to have several redundant connections configured. Enable interface discovery options so your nodes can continuously discover peering opportunities as the network evolves.
+
+If no interfaces are configured, Phantom will display a helpful setup guide pointing to these resources.
 
 ---
 
@@ -390,7 +398,7 @@ python phantom.py download movie.mkv.ghost -o ~/Desktop
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Windows  | ✅ Tested | AutoInterface auto-disabled (IPv6 label fix) |
+| Windows  | ✅ Tested | Field-tested (Windows ↔ Linux cross-mesh) |
 | Linux    | ✅ Tested | Field-tested (Ubuntu <→ Windows cross-mesh) |
 | macOS    | ✅ Supported | Untested, should work |
 
@@ -431,10 +439,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.3** — TUI dashboard: interactive terminal interface with Textual
 - [x] **v0.4** — Patient discovery: announce-based + direct path, auto-failover
 - [x] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders, continuous discovery
-- [x] **v0.6** — Global mesh: auto-config Sideband Hub, multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested
-- [x] **v0.7** — PEX (Peer Exchange): seeders share peer lists over Links, bypassing announce rate-limits, bidirectional seeder discovery, stale path invalidation *(current)*
-- [ ] **v0.8** — LXMF integration: offline chunk caching via propagation nodes
-- [ ] **v0.9** — DHT-like peer discovery and reputation system
+- [x] **v0.6** — Global mesh: multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested
+- [x] **v0.7** — PEX (Peer Exchange): seeders share peer lists over Links, bypassing announce rate-limits, bidirectional seeder discovery, stale path invalidation
+- [x] **v0.8** — Decentralization fix: removed all config file modification, removed hardcoded entrypoints, connectivity guidance via official Reticulum docs *(current)*
+- [ ] **v0.9** — LXMF integration: offline chunk caching via propagation nodes
+- [ ] **v1.0** — DHT-like peer discovery and reputation system
 
 ---
 

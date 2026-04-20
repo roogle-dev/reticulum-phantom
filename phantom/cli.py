@@ -39,8 +39,8 @@ from phantom import ui
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Global exception hooks — prevent RNS thread crashes from killing the process
-# The Sideband Hub TCP socket sometimes drops (WinError 10038), causing
-# unhandled exceptions in RNS internal threads.
+# TCP sockets sometimes drop (WinError 10038), causing unhandled exceptions
+# in RNS internal threads.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _thread_exception_hook(args):
@@ -509,6 +509,11 @@ def cmd_seed(args):
     network = PhantomNetwork(args.rns_config)
     network.start()
 
+    # Check connectivity and show guidance if needed
+    status = network.check_connectivity()
+    if not status.is_ok:
+        ui.print_no_connectivity(status)
+
     # Load identity
     pid = PhantomIdentity()
     pid.load()
@@ -609,6 +614,11 @@ def cmd_seed_all(args):
     ui.print_info("Starting Reticulum Network Stack...")
     network = PhantomNetwork(args.rns_config)
     network.start()
+
+    # Check connectivity and show guidance if needed
+    status = network.check_connectivity()
+    if not status.is_ok:
+        ui.print_no_connectivity(status)
 
     # Load identity
     pid = PhantomIdentity()
@@ -785,6 +795,11 @@ def cmd_download(args):
     rns_config = getattr(args, 'rns_config', None)
     network = PhantomNetwork(rns_config)
     network.start()
+
+    # Check connectivity and show guidance if needed
+    status = network.check_connectivity()
+    if not status.is_ok:
+        ui.print_no_connectivity(status)
 
     # Load identity
     pid = PhantomIdentity()

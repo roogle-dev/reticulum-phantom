@@ -59,7 +59,7 @@ python -m pytest tests/ -v
 
 ### Mesh Etiquette (Critical)
 
-Reticulum is a shared mesh network. Transport nodes (like Sideband Hub) enforce **announce rate-limiting** — if you announce too frequently, your packets get silently dropped and your destination may be temporarily blocked.
+Reticulum is a shared mesh network. Transport nodes enforce **announce rate-limiting** — if you announce too frequently, your packets get silently dropped and your destination may be temporarily blocked.
 
 **Rules for contributors:**
 

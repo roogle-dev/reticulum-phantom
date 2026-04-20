@@ -4,7 +4,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 
 [project]
 name = "reticulum-phantom"
-version = "0.5.0"
+version = "0.8.0"
 description = "Decentralized, encrypted P2P file sharing over the Reticulum mesh network"
 readme = "README.md"
 license = {text = "MIT"}

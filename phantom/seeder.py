@@ -378,27 +378,25 @@ class Seeder:
         """
         Respond to a leecher's 'want' announcement.
 
-        Strategy:
-        1. Request path to the leecher (triggers PATH_RESPONSE, not rate-limited)
-        2. Then re-announce our destination (may be rate-limited, but path
-           request ensures the leecher can discover our path regardless)
+        Strategy: Request path to the leecher — this triggers a PATH_RESPONSE
+        on the mesh, which is NOT subject to announce rate limiting.
+        The leecher will see our path appear in their path table and can
+        connect directly via Link.
+
+        We do NOT re-announce here. Re-announcing per want causes announce
+        storms when multiple leechers want the same file simultaneously.
         """
         if not self._running or not self._destination:
             return
 
         try:
-            # Step 1: Request path to leecher — this triggers a PATH_RESPONSE
-            # on the mesh, which is NOT subject to announce rate limiting.
-            # The leecher will see our path appear in the path table.
+            # Request path to leecher — NOT rate-limited
             if not RNS.Transport.has_path(leecher_dest_hash):
                 RNS.Transport.request_path(leecher_dest_hash)
 
-            # Step 2: Re-announce (may be rate-limited by Hub, but worth trying)
-            self._destination.announce(app_data=self._make_announce_data())
-
             RNS.log(
                 f"Responded to want for {self.ghost.name} — "
-                f"re-announced dest {self._destination.hash.hex()[:16]}...",
+                f"path request sent (no re-announce)",
                 RNS.LOG_INFO
             )
 

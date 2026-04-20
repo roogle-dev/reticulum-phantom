@@ -529,18 +529,11 @@ class Leecher:
             except Exception:
                 live_want_dest = None
 
-            # Periodically re-announce want + probe known dests during download
-            announce_data = umsgpack.packb({
-                "ghost_hash": self.ghost_hash,
-                "type": "want",
-                "t": int(time.time()),
-            })
+            # PEX-only discovery during download — no want re-announces.
+            # We're already connected and downloading; PEX over Links
+            # handles peer discovery without consuming announce bandwidth.
+            # The announce handler still catches new seeders passively.
             while not all_done.is_set() and self._running:
-                try:
-                    if live_want_dest:
-                        live_want_dest.announce(app_data=announce_data)
-                except Exception:
-                    pass
 
                 # PEX: ask all connected peers for their peer lists
                 pex_new_dests = set()

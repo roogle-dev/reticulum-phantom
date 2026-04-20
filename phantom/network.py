@@ -2,14 +2,53 @@
 Reticulum Phantom — Network Initialization
 
 Handles RNS (Reticulum Network Stack) initialization and
-transport configuration. Starts with TCP/IP transport and
-can be extended to support LoRa, packet radio, etc.
+transport configuration. Phantom NEVER modifies the user's
+Reticulum configuration — interface setup is the user's
+responsibility, following Reticulum's decentralized design.
 """
 
 import os
+import re
+
 import RNS
 
 from . import config
+
+
+class ConnectivityStatus:
+    """Result of a connectivity check — never modifies anything."""
+
+    def __init__(self, has_interfaces=False, interface_count=0, config_exists=False):
+        self.has_interfaces = has_interfaces
+        self.interface_count = interface_count
+        self.config_exists = config_exists
+
+    @property
+    def is_ok(self):
+        return self.has_interfaces
+
+    def get_guidance_message(self):
+        """
+        Return a helpful message for users with no connectivity.
+        Points to official Reticulum resources per Mark Qvist's guidance.
+        """
+        if self.is_ok:
+            return None
+
+        lines = [
+            "No Reticulum network interfaces configured.",
+            "",
+            "Phantom requires at least one active Reticulum interface to",
+            "communicate with the mesh. To configure your interfaces:",
+            "",
+            f"  1. Reticulum docs:  {config.RETICULUM_DOCS_URL}",
+            f"  2. Interface list:  {config.INTERFACE_DIRECTORY_URL}",
+            f"  3. Network map:     {config.RMAP_URL}",
+            "",
+            "Edit your Reticulum config file (~/.reticulum/config) to add",
+            "one or more interfaces, then restart Phantom.",
+        ]
+        return "\n".join(lines)
 
 
 class PhantomNetwork:
@@ -18,6 +57,10 @@ class PhantomNetwork:
 
     Initializes RNS with appropriate configuration and
     provides utility methods for network operations.
+
+    IMPORTANT: Phantom never modifies the user's Reticulum config.
+    Users configure their own interfaces following Reticulum's
+    decentralized design philosophy.
     """
 
     def __init__(self, configpath=None):
@@ -47,9 +90,12 @@ class PhantomNetwork:
         Start the Reticulum network stack.
 
         This will:
-          1. Load or create Reticulum config
-          2. Initialize all configured interfaces (AutoInterface, TCP, etc.)
+          1. Check for configured interfaces (read-only)
+          2. Initialize RNS with the user's existing config
           3. Start the transport engine
+
+        Phantom never modifies the Reticulum configuration.
+        If no interfaces are configured, a guidance message is logged.
 
         Returns:
             The RNS.Reticulum instance.
@@ -60,8 +106,16 @@ class PhantomNetwork:
         try:
             RNS.log("Starting Reticulum Network Stack...", RNS.LOG_INFO)
 
-            # Ensure Sideband Hub is configured for mesh connectivity
-            self._ensure_sideband_hub()
+            # Check connectivity status (read-only — never modifies config)
+            status = self.check_connectivity()
+            if not status.is_ok:
+                guidance = status.get_guidance_message()
+                if guidance:
+                    RNS.log(
+                        "No network interfaces detected. "
+                        "See Reticulum docs for interface configuration.",
+                        RNS.LOG_WARNING
+                    )
 
             self._reticulum = RNS.Reticulum(self._configpath)
             self._started = True
@@ -78,6 +132,91 @@ class PhantomNetwork:
         except Exception as e:
             RNS.log(f"Failed to start Reticulum: {e}", RNS.LOG_ERROR)
             raise
+
+    def check_connectivity(self):
+        """
+        Check if the user's Reticulum config has any enabled interfaces.
+
+        This is a READ-ONLY check — it never modifies any files.
+
+        Returns:
+            ConnectivityStatus with interface info and guidance.
+        """
+        try:
+            if self._configpath:
+                config_dir = self._configpath
+            else:
+                config_dir = os.path.join(
+                    os.path.expanduser("~"), ".reticulum"
+                )
+
+            config_file = os.path.join(config_dir, "config")
+
+            if not os.path.isfile(config_file):
+                return ConnectivityStatus(
+                    has_interfaces=False,
+                    interface_count=0,
+                    config_exists=False,
+                )
+
+            with open(config_file, "r") as f:
+                content = f.read()
+
+            # Count enabled interfaces (read-only scan)
+            enabled_count = 0
+            in_interfaces = False
+            current_iface = None
+            current_enabled = None
+
+            for line in content.split("\n"):
+                stripped = line.strip()
+
+                if stripped == "[interfaces]":
+                    in_interfaces = True
+                    continue
+
+                if in_interfaces and stripped.startswith("[") and not stripped.startswith("[["):
+                    # Left [interfaces] section — save last interface
+                    if current_iface and current_enabled:
+                        enabled_count += 1
+                    break
+
+                if in_interfaces:
+                    if stripped.startswith("[[") and stripped.endswith("]]"):
+                        # Save previous interface
+                        if current_iface and current_enabled:
+                            enabled_count += 1
+                        current_iface = stripped[2:-2].strip()
+                        current_enabled = None
+                        continue
+
+                    if current_iface and re.match(
+                        r'^\s*(interface_)?enabled\s*=', stripped
+                    ):
+                        if re.search(
+                            r'=\s*(yes|true|1)\s*$', stripped, re.IGNORECASE
+                        ):
+                            current_enabled = True
+                        else:
+                            current_enabled = False
+
+            # Don't forget the last interface
+            if current_iface and current_enabled:
+                enabled_count += 1
+
+            return ConnectivityStatus(
+                has_interfaces=enabled_count > 0,
+                interface_count=enabled_count,
+                config_exists=True,
+            )
+
+        except Exception:
+            # Can't read config — RNS will handle this on its own
+            return ConnectivityStatus(
+                has_interfaces=True,  # Assume OK if we can't check
+                interface_count=0,
+                config_exists=False,
+            )
 
     def has_path(self, destination_hash):
         """
@@ -173,7 +312,7 @@ class PhantomNetwork:
             pass
 
         # 2. Configured interfaces from Reticulum config
-        # (shows Sideband Hub etc. that the shared instance manages)
+        # (shows interfaces that the shared instance manages)
         try:
             config_dir = self._configpath or os.path.join(
                 os.path.expanduser("~"), ".reticulum"
@@ -243,163 +382,3 @@ class PhantomNetwork:
             "rxb": 0,
             "txb": 0,
         })
-
-    def _ensure_sideband_hub(self):
-        """
-        Ensure the Sideband Hub interface is enabled in the Reticulum config.
-        This gives new users instant global mesh connectivity.
-        
-        Handles three cases:
-          1. No config exists → will be created by RNS, we add hub after
-          2. Config exists, no Sideband Hub → append it
-          3. Config exists, Sideband Hub disabled → enable it
-        """
-        import re
-
-        try:
-            # Find the config file
-            if self._configpath:
-                config_dir = self._configpath
-            else:
-                config_dir = os.path.join(
-                    os.path.expanduser("~"), ".reticulum"
-                )
-
-            config_file = os.path.join(config_dir, "config")
-
-            # If no config exists yet, RNS will create one — we'll add to it
-            # after first run. For now, check if config exists.
-            if not os.path.isfile(config_file):
-                return  # RNS will create default config on first run
-
-            with open(config_file, "r") as f:
-                content = f.read()
-
-            has_sideband = (
-                "sideband.connect.reticulum.network" in content.lower()
-                or "sideband hub" in content.lower()
-            )
-
-            if has_sideband:
-                # Check if it's enabled
-                # Parse the Sideband Hub block to find enabled = No/Yes
-                lines = content.splitlines(True)
-                in_sideband = False
-                sideband_enabled = False
-                modified = False
-
-                for i, line in enumerate(lines):
-                    stripped = line.strip()
-
-                    if "sideband hub" in stripped.lower() and stripped.startswith("[["):
-                        in_sideband = True
-                        continue
-
-                    if in_sideband and stripped.startswith("[["):
-                        in_sideband = False
-                        continue
-
-                    if in_sideband and re.match(r'^\s*(interface_)?enabled\s*=', stripped):
-                        if re.search(r'=\s*(yes|true|1)\s*$', stripped, re.IGNORECASE):
-                            sideband_enabled = True
-                        else:
-                            # It's disabled — enable it
-                            lines[i] = re.sub(
-                                r'(enabled\s*=\s*)(No|False|no|false|0)',
-                                r'\g<1>Yes',
-                                line
-                            )
-                            modified = True
-                            sideband_enabled = True
-                        in_sideband = False
-
-                if modified:
-                    with open(config_file, "w") as f:
-                        f.write("".join(lines))
-                    RNS.log(
-                        "Auto-enabled Sideband Hub for mesh connectivity",
-                        RNS.LOG_INFO
-                    )
-                    print("ℹ Auto-enabled Sideband Hub for mesh connectivity")
-
-            else:
-                # No Sideband Hub at all — append it
-                sideband_config = """
-  # Phantom Mesh — Global connectivity via Sideband Hub
-  [[Sideband Hub]]
-    type = TCPClientInterface
-    enabled = Yes
-    target_host = sideband.connect.reticulum.network
-    target_port = 7822
-"""
-                with open(config_file, "a") as f:
-                    f.write(sideband_config)
-
-                RNS.log(
-                    "Added Sideband Hub to Reticulum config for mesh connectivity",
-                    RNS.LOG_INFO
-                )
-                print("ℹ Added Sideband Hub interface for mesh connectivity")
-
-                # Re-read for autointerface check
-                with open(config_file, "r") as f:
-                    content = f.read()
-
-            # Disable AutoInterface on Windows to prevent IPv6 errors
-            self._disable_autointerface(config_file, content)
-
-        except Exception as e:
-            # Non-fatal — user can still configure manually
-            RNS.log(
-                f"Could not auto-configure Sideband Hub: {e}",
-                RNS.LOG_DEBUG
-            )
-
-    @staticmethod
-    def _disable_autointerface(config_file, content):
-        """
-        Disable AutoInterface to prevent IPv6 'label too long' errors
-        on Windows. Sideband Hub provides global mesh connectivity.
-        """
-        import sys
-        if sys.platform != "win32":
-            return  # Only needed on Windows
-
-        try:
-            if "[[Default Interface]]" not in content:
-                return
-
-            # Line-by-line: find enabled=Yes ONLY inside [[Default Interface]] block
-            lines = content.splitlines(True)  # Keep line endings
-            in_default_block = False
-            modified = False
-
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-
-                # Detect entering [[Default Interface]] block
-                if stripped == "[[Default Interface]]":
-                    in_default_block = True
-                    continue
-
-                # Detect leaving block (new [[ section starts)
-                if stripped.startswith("[[") and in_default_block:
-                    in_default_block = False
-                    continue
-
-                # Only modify enabled inside Default Interface block
-                if in_default_block and stripped.lower().startswith("enabled"):
-                    if "yes" in stripped.lower():
-                        lines[i] = line.replace("Yes", "No").replace("yes", "No")
-                        modified = True
-                        in_default_block = False  # Done
-
-            if modified:
-                with open(config_file, "w") as f:
-                    f.write("".join(lines))
-                RNS.log(
-                    "Disabled AutoInterface (using Sideband Hub instead)",
-                    RNS.LOG_INFO
-                )
-        except Exception:
-            pass
