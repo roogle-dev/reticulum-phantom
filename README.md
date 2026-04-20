@@ -370,6 +370,10 @@ Phantom uses a 3-layer discovery hierarchy, ordered by mesh cost:
 - Never announces during an active download (PEX handles it)
 - Never announces more frequently than every 120 seconds per destination
 
+### Scaling Note
+
+These numbers are per-node. At massive scale (millions of users), even infrequent heartbeats add up (1M seeders at 3h = ~93 announces/second globally). Phantom's architecture is designed to minimize this: PEX and ghost file dests handle real discovery, the heartbeat is only a path keepalive. If Reticulum grows to that scale, the heartbeat interval can be extended further or replaced entirely with on-demand path resolution.
+
 ---
 
 ## Settings
