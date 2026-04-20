@@ -352,7 +352,8 @@ Reticulum is a shared mesh network. Transport nodes enforce announce rate-limiti
 | Seeding 10 files | 1 per 18 minutes | Safe |
 | Seeding 50 files | 1 per 3.6 minutes | Safe |
 | Seeding 100 files | 1 per 108 seconds | Safe (above rate target) |
-| Downloading 1 file | 1x initial want, then 1 per 120s until seeder found | Safe |
+| Downloading (seeder found) | 1x initial want only, then PEX takes over | Safe |
+| Downloading (no seeder) | 5 retries with exponential backoff (120s, 240s, 480s, 960s, 1920s) then gives up | Safe |
 
 ### How Phantom Discovers Peers
 

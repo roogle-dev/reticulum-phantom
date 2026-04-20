@@ -785,11 +785,26 @@ class Leecher:
             t.join(timeout=6)
 
         # ── Fallback: wait for announce handler responses ─────────
+        # Uses exponential backoff with max retries to prevent mesh flooding.
+        # Schedule: 120s, 240s, 480s, 960s, 1920s = ~62 min total then give up.
         last_announce = time.time()
+        want_retries = 0
+        current_interval = config.WANT_ANNOUNCE_INTERVAL
 
         while not first_found.is_set() and self._running:
-            # Re-announce want periodically
-            if time.time() - last_announce > config.WANT_ANNOUNCE_INTERVAL:
+            # Re-announce want with exponential backoff
+            if time.time() - last_announce > current_interval:
+                # Check retry limit
+                want_retries += 1
+                if want_retries > config.WANT_MAX_RETRIES:
+                    RNS.log(
+                        f"No seeders found after {want_retries - 1} attempts "
+                        f"(~{int(sum(config.WANT_ANNOUNCE_INTERVAL * config.WANT_BACKOFF_MULTIPLIER**i for i in range(want_retries - 1)) / 60)} min). "
+                        f"Giving up. The seeder may be offline.",
+                        RNS.LOG_WARNING
+                    )
+                    break
+
                 announce_data = umsgpack.packb({
                     "ghost_hash": input_hash,
                     "type": "want",
@@ -819,9 +834,14 @@ class Leecher:
                             break
 
                 RNS.log(
-                    f"📢 Re-announced want for {input_hash[:16]}...",
+                    f"Re-announced want for {input_hash[:16]}... "
+                    f"(attempt {want_retries}/{config.WANT_MAX_RETRIES}, "
+                    f"next in {int(current_interval * config.WANT_BACKOFF_MULTIPLIER)}s)",
                     RNS.LOG_INFO
                 )
+
+                # Exponential backoff
+                current_interval = int(current_interval * config.WANT_BACKOFF_MULTIPLIER)
 
             time.sleep(1)
 

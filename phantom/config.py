@@ -39,7 +39,11 @@ MAX_SWARM_PEERS = 5               # max simultaneous peer connections
 # Reverse discovery: leecher announces "I want X", seeders respond
 # With PEX handling primary peer discovery, this is only a fallback.
 # Must stay above announce_rate_target (typically 60-120s).
-WANT_ANNOUNCE_INTERVAL = 120       # seconds between want re-announces
+# Uses exponential backoff: 120s, 240s, 480s, 960s, 1920s then gives up.
+# Total search time: ~62 minutes before declaring no seeders available.
+WANT_ANNOUNCE_INTERVAL = 120       # initial seconds between want re-announces
+WANT_MAX_RETRIES = 5               # max want re-announces before giving up
+WANT_BACKOFF_MULTIPLIER = 2.0      # double the interval after each retry
 
 # TCP/IP defaults for initial transport
 DEFAULT_TCP_HOST = "0.0.0.0"
