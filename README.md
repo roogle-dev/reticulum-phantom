@@ -254,7 +254,7 @@ Phantom uses a **three-layer discovery strategy**:
 1. **Direct path resolution (fast)** — The .ghost file contains known seeder destinations. The leecher uses `await_path()` to resolve the path through the mesh — typically connects in 1-2 seconds
 2. **PEX — Peer Exchange (primary)** — After connecting to ANY seeder, the leecher asks `"who else seeds this?"` over the encrypted Link. The seeder returns all known peers. This bypasses announce rate-limiting entirely because Links are never throttled
 3. **Announce-based discovery (fallback)** — Leecher broadcasts "I want ghost_hash X" as an RNS announce. Seeders listening for wants re-announce themselves. Used when no seeder dests are known
-4. **Continuous discovery** — During download, PEX runs every 30 seconds to find new peers joining the swarm
+4. **Continuous discovery** — During download, PEX runs every 120 seconds to find new peers joining the swarm
 5. **Auto-failover** — If a seeder dies mid-transfer, its chunks redistribute to remaining peers
 
 ### PEX (Peer Exchange)
@@ -268,7 +268,7 @@ Phantom uses a **three-layer discovery strategy**:
      ├── Leecher connects to each peer directly
      │   (no announces needed — Links are never rate-limited)
      │
-     └── Every 30s during download: ask peers for MORE peers
+     └── Every 120s during download: ask peers for MORE peers
          (swarm grows organically)
 ```
 
@@ -361,7 +361,7 @@ Phantom uses a 3-layer discovery hierarchy, ordered by mesh cost:
 
 1. **Direct path resolution** (zero announce cost): Ghost files contain seeder destinations. The leecher resolves paths directly.
 2. **PEX over encrypted Links** (zero announce cost): Connected peers exchange peer lists. Links are point-to-point and never rate-limited.
-3. **Announce-based discovery** (fallback only): A single "want" broadcast, repeated every 120s only while no seeder has responded. Stops as soon as one connects.
+3. **Announce-based discovery** (fallback only): A single "want" broadcast with exponential backoff (120s, 240s, 480s, 960s, 1920s). Max 5 retries then gives up (~62 min). Stops immediately when a seeder connects.
 
 ### What Phantom Never Does
 
@@ -393,7 +393,7 @@ python phantom.py settings tcp_port 8888
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `chunk_size` | 1048576 (1MB) | File chunk size in bytes |
-| `announce_interval` | 1800 (30min) | Re-announce interval in seconds |
+| `announce_interval` | 10800 (3h) | Seeder heartbeat re-announce interval in seconds |
 | `transfer_timeout` | 120 (2min) | Transfer timeout in seconds |
 | `auto_seed_after_download` | true | Auto-seed after downloading |
 | `tcp_enabled` | true | Enable TCP/IP transport |
@@ -477,7 +477,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders, continuous discovery
 - [x] **v0.6** — Global mesh: multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested
 - [x] **v0.7** — PEX (Peer Exchange): seeders share peer lists over Links, bypassing announce rate-limits, bidirectional seeder discovery, stale path invalidation
-- [x] **v0.8** — Decentralization fix: removed all config file modification, removed hardcoded entrypoints, connectivity guidance via official Reticulum docs *(current)*
+- [x] **v0.8** — Decentralization fix: removed config modification, removed hardcoded entrypoints, 3h seeder heartbeat, exponential backoff on wants, mesh etiquette docs *(current)*
 - [ ] **v0.9** — LXMF integration: offline chunk caching via propagation nodes
 - [ ] **v1.0** — DHT-like peer discovery and reputation system
 
