@@ -23,7 +23,7 @@ from . import config
 from .identity import PhantomIdentity
 from .ghost_file import GhostFile
 from .network import PhantomNetwork
-from .seeder import Seeder
+from .seeder import Seeder, SeedManager
 from .leecher import Leecher
 
 
@@ -77,6 +77,9 @@ class PhantomEngine:
         self._peers = {}  # identity_hex → {name, dest, last_seen, files[]}
         self._mesh_nodes = {}  # dest_hex → {identity, app_data, last_seen, hops}
 
+        # Shared seed manager (single destination for all seeded files)
+        self._seed_manager = None
+
         # Callbacks for TUI
         self.on_log = None           # Called with (timestamp, level, message)
         self.on_transfer_update = None  # Called with (transfer_id)
@@ -118,6 +121,9 @@ class PhantomEngine:
         self._add_log("info",
                        f"Engine started | Identity: {self._identity.hash_pretty}")
 
+        # Initialize the shared seed manager
+        self._seed_manager = SeedManager(self._network, self._identity)
+
         # Register announce handler to track peers on the mesh
         self._register_peer_handler()
 
@@ -138,16 +144,20 @@ class PhantomEngine:
                     except Exception:
                         pass
 
+        # Stop and reset the shared seed manager
+        if self._seed_manager:
+            self._seed_manager.stop()
+            self._seed_manager = None
+        Seeder.reset_shared_manager()
+
         self._add_log("info", "Engine stopped")
 
-    def seed_file(self, file_path, announce_delay=0):
+    def seed_file(self, file_path):
         """
         Start seeding a file.
 
         Args:
             file_path: Path to the file (or .ghost file).
-            announce_delay: Seconds to wait before first announce.
-                            Used by seed-all to stagger announces.
 
         Returns:
             Transfer ID string, or None on error.
@@ -218,7 +228,7 @@ class PhantomEngine:
 
         # Create and start seeder
         seeder = Seeder(ghost, source_path, self._network, self._identity)
-        seeder.start(announce_delay=announce_delay)
+        seeder.start()
         transfer._seeder = seeder
         transfer.destination_hash = seeder.destination_hash_hex or ""
 
@@ -527,7 +537,14 @@ class PhantomEngine:
                         # Only track seeder announces in the peer list
                         if metadata.get("type") != "seeder":
                             return
-                        ghost_hash = metadata.get("ghost_hash", "")
+
+                        # Match ghost_hashes list (single-dest architecture)
+                        peer_hashes = metadata.get("ghost_hashes", [])
+                        # Backward compat: single ghost_hash field
+                        if not peer_hashes:
+                            gh = metadata.get("ghost_hash", "")
+                            if gh:
+                                peer_hashes = [gh]
 
                         identity_hex = announced_identity.hash.hex()
                         dest_hex = destination_hash.hex()
@@ -548,11 +565,12 @@ class PhantomEngine:
 
                             peer = engine._peers[identity_hex]
                             peer["last_seen"] = time.time()
-                            peer["files"][ghost_hash] = {
-                                "name": ghost_hash[:16] + "...",
-                                "ghost_hash": ghost_hash,
-                                "dest_hash": dest_hex,
-                            }
+                            for ghost_hash in peer_hashes:
+                                peer["files"][ghost_hash] = {
+                                    "name": ghost_hash[:16] + "...",
+                                    "ghost_hash": ghost_hash,
+                                    "dest_hash": dest_hex,
+                                }
                             if dest_hex not in peer["dest_hashes"]:
                                 peer["dest_hashes"].append(dest_hex)
 

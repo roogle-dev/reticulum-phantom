@@ -58,10 +58,6 @@ class GhostFile:
             return self.file_hash[:32]  # 16 bytes = 32 hex chars
         return None
 
-    @property
-    def destination_aspects(self):
-        """RNS destination aspects for mesh announcement."""
-        return ["swarm", self.ghost_hash]
 
     @staticmethod
     def create(filepath, identity_hash="", comment="",

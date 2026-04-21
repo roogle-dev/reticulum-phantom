@@ -674,14 +674,7 @@ def cmd_seed_all(args):
                     ghost.save()
 
             seeder = Seeder(ghost, source_path, network, pid)
-            # Adaptive stagger: scale up for large libraries to be mesh-friendly
-            file_count = len(seeders) + 1
-            if file_count > 50:
-                per_file = config.ANNOUNCE_STAGGER_MAX
-            else:
-                per_file = config.ANNOUNCE_STAGGER_PER_FILE
-            stagger = len(seeders) * per_file
-            seeder.start(announce_delay=stagger)
+            seeder.start()
             seeders.append(seeder)
 
             ui.console.print(
@@ -978,11 +971,11 @@ def cmd_download(args):
                 ui.print_info("   Press Ctrl+C to stop seeding.")
 
                 from .seeder import Seeder
-                seeder = Seeder(ghost_file, network, pid)
+                seeder = Seeder(ghost_file, file_path, network, pid)
 
                 try:
-                    seeder.start(file_path)
-                    dest_hex = seeder._destination.hash.hex() if seeder._destination else "?"
+                    seeder.start()
+                    dest_hex = seeder.destination_hash_hex or "?"
                     ui.print_info(f"   ↑ {ghost_file.name} | dest:{dest_hex}")
 
                     # Block until Ctrl+C
@@ -1162,7 +1155,6 @@ def cmd_probe(args):
         RNS.Destination.SINGLE,
         config.RNS_APP_NAME,
         "probe",
-        ghost_hash
     )
 
     announce_data = umsgpack.packb({

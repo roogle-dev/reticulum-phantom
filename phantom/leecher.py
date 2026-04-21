@@ -476,8 +476,14 @@ class Leecher:
                                 return
                             if metadata.get("type") != "seeder":
                                 return
-                            gh = metadata.get("ghost_hash", "")
-                            if gh == self._target:
+                            # Match against ghost_hashes list (single-dest architecture)
+                            peer_hashes = metadata.get("ghost_hashes", [])
+                            # Backward compat: single ghost_hash field
+                            if not peer_hashes:
+                                gh = metadata.get("ghost_hash", "")
+                                if gh:
+                                    peer_hashes = [gh]
+                            if self._target in peer_hashes:
                                 if destination_hash not in active_peer_ids:
                                     RNS.log(
                                         f"New seeder discovered during download: "
@@ -524,7 +530,6 @@ class Leecher:
                     RNS.Destination.SINGLE,
                     config.RNS_APP_NAME,
                     "want",
-                    self.ghost_hash
                 )
             except Exception:
                 live_want_dest = None
@@ -688,8 +693,14 @@ class Leecher:
                         # Only match SEEDER announces, not other leechers' wants
                         if metadata.get("type") != "seeder":
                             return
-                        gh = metadata.get("ghost_hash", "")
-                        if gh == self._target:
+                        # Match against ghost_hashes list (single-dest architecture)
+                        peer_hashes = metadata.get("ghost_hashes", [])
+                        # Backward compat: single ghost_hash field
+                        if not peer_hashes:
+                            gh = metadata.get("ghost_hash", "")
+                            if gh:
+                                peer_hashes = [gh]
+                        if self._target in peer_hashes:
                             if destination_hash not in failed_dests:
                                 with found_lock:
                                     if destination_hash not in found_dests:
@@ -714,7 +725,6 @@ class Leecher:
             RNS.Destination.SINGLE,
             config.RNS_APP_NAME,
             "want",
-            input_hash
         )
 
         # ── Hint dests from .ghost file (primary discovery) ────────
@@ -945,14 +955,13 @@ class Leecher:
         RNS.log(f"Recalled seeder identity: {RNS.prettyhexrep(seeder_identity.hash)}", RNS.LOG_DEBUG)
 
         # Build the OUT destination matching the seeder's IN destination.
-        # ghost_hash is used as an aspect so each file has a unique destination.
+        # Single-destination architecture: no ghost_hash in aspects.
         seeder_destination = RNS.Destination(
             seeder_identity,
             RNS.Destination.OUT,
             RNS.Destination.SINGLE,
             config.RNS_APP_NAME,
             "swarm",
-            self.ghost_hash
         )
 
         # Verify the destination hash matches what we discovered
@@ -1052,7 +1061,7 @@ class Leecher:
 
         receipt = link.request(
             "manifest",
-            data=None,
+            data=umsgpack.packb({"ghost_hash": self.ghost_hash}),
             response_callback=on_response,
             failed_callback=on_failed,
             timeout=config.DEFAULT_TRANSFER_TIMEOUT
@@ -1146,7 +1155,7 @@ class Leecher:
         try:
             link.request(
                 "peers",
-                data=None,
+                data=umsgpack.packb({"ghost_hash": self.ghost_hash}),
                 response_callback=on_response,
                 failed_callback=on_failed,
                 timeout=10
@@ -1197,8 +1206,11 @@ class Leecher:
             response_failed[0] = True
             response_event.set()
 
-        # Request the chunk
-        request_data = umsgpack.packb(chunk_index)
+        # Request the chunk — include ghost_hash for single-dest dispatch
+        request_data = umsgpack.packb({
+            "ghost_hash": self.ghost_hash,
+            "index": chunk_index,
+        })
 
         receipt = link.request(
             "chunk",

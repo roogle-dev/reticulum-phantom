@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![Reticulum](https://img.shields.io/badge/Reticulum-Mesh_Network-purple.svg)](https://reticulum.network/)
-[![Version](https://img.shields.io/badge/v0.8.0-Stable-green.svg)](#roadmap)
+[![Version](https://img.shields.io/badge/v0.9.0-Stable-green.svg)](#roadmap)
 
 ---
 
@@ -30,7 +30,7 @@ Phantom lets you share files over [Reticulum](https://reticulum.network/) — a 
 - **⏸️ Resume support** — Downloads pick up where they left off, with accurate progress tracking
 - **🔀 PEX (Peer Exchange)** — Seeders share their peer lists over encrypted Links, bypassing announce rate-limits
 - **🌱 Auto-seed** — After downloading, automatically start seeding to strengthen the swarm
-- **🛡️ Mesh-friendly** — Adaptive announce stagger prevents network spam, even with 1000+ files
+- **🛡️ Mesh-friendly** — Single destination per node means seeding 1000 files costs **one** announce, not 1000
 
 ## Quick Start
 
@@ -262,8 +262,8 @@ Phantom uses a **three-layer discovery strategy**:
 ```
  Leecher connects to any seeder it knows (encrypted Link)
      │
-     ├── link.request("peers")
-     │   └── Seeder responds: ["fd1bbf73...", "ab12cd34...", ...]
+      ├── link.request("peers", {ghost_hash: "..."})
+      │   └── Seeder responds: ["fd1bbf73...", "ab12cd34...", ...]
      │
      ├── Leecher connects to each peer directly
      │   (no announces needed — Links are never rate-limited)
@@ -276,7 +276,7 @@ Phantom uses a **three-layer discovery strategy**:
 
 ```
  Seeder A                                                    Leecher
-┌────────┐  announce(type="seeder", ghost_hash=...)          ┌────────┐
+┌────────┐  announce(type="seeder", ghost_hashes=[...])     ┌────────┐
 │ seed   ├──────────────────────────────────────────────────►│ listen │
 │ movie  │                    Reticulum Mesh                │ for    │
 └────────┘                   ┌──────────────┐              │ type=  │
@@ -305,8 +305,8 @@ Phantom uses a **three-layer discovery strategy**:
 
 1. **Identity** — Each node has a persistent X25519/Ed25519 keypair
 2. **Ghost File** — Metadata descriptor with per-chunk SHA-256 hashes + multi-seeder destinations
-3. **Seeder** — Creates a unique RNS destination per file, announces with `type: "seeder"`, serves chunks + PEX peer lists
-4. **Leecher** — Discovers seeders via direct path + PEX + announce handler, downloads chunks in parallel
+3. **SeedManager** — ONE `RNS.Destination("phantom", "swarm")` per node. All seeded files share this single destination. Request handlers dispatch by `ghost_hash` in the payload. One announce, one heartbeat — regardless of file count
+4. **Leecher** — Discovers seeders via direct path + PEX + announce handler, downloads chunks in parallel from multiple peers
 5. **Engine** — Thread-safe background manager for multiple concurrent seeders/leechers
 6. **TUI** — Interactive terminal dashboard built with Textual (optional)
 7. **Network** — Read-only connectivity check with guidance to official Reticulum docs; never modifies user config
@@ -346,14 +346,15 @@ Reticulum is a shared mesh network. Transport nodes enforce announce rate-limiti
 
 ### Announce Budget
 
+All seeded files share **one** RNS destination, so announce cost is constant regardless of file count.
+
 | Scenario | Announce Rate | Status |
 |----------|--------------|--------|
-| Seeding 1 file | 1 per 3 hours | Safe |
-| Seeding 10 files | 1 per 18 minutes | Safe |
-| Seeding 50 files | 1 per 3.6 minutes | Safe |
-| Seeding 100 files | 1 per 108 seconds | Safe (above rate target) |
-| Downloading (seeder found) | 1x initial want only, then PEX takes over | Safe |
-| Downloading (no seeder) | 5 retries with exponential backoff (120s, 240s, 480s, 960s, 1920s) then gives up | Safe |
+| Seeding 1 file | 1 per 3 hours | ✅ Safe |
+| Seeding 100 files | 1 per 3 hours (same destination) | ✅ Safe |
+| Seeding 1000 files | 1 per 3 hours (same destination) | ✅ Safe |
+| Downloading (seeder found) | 1x initial want only, then PEX takes over | ✅ Safe |
+| Downloading (no seeder) | 5 retries with exponential backoff (120s→1920s) then gives up | ✅ Safe |
 
 ### How Phantom Discovers Peers
 
@@ -368,11 +369,12 @@ Phantom uses a 3-layer discovery hierarchy, ordered by mesh cost:
 - Never modifies your Reticulum configuration
 - Never re-announces in response to leecher wants (uses path requests instead)
 - Never announces during an active download (PEX handles it)
+- Never creates per-file destinations — one destination per node, period
 - Never announces more frequently than every 120 seconds per destination
 
 ### Scaling Note
 
-These numbers are per-node. At massive scale (millions of users), even infrequent heartbeats add up (1M seeders at 3h = ~93 announces/second globally). Phantom's architecture is designed to minimize this: PEX and ghost file dests handle real discovery, the heartbeat is only a path keepalive. If Reticulum grows to that scale, the heartbeat interval can be extended further or replaced entirely with on-demand path resolution.
+Since every node is exactly one destination regardless of how many files it seeds, the global announce load equals the number of nodes, not the number of files. At massive scale (1M nodes at 3h heartbeat = ~93 announces/second globally), PEX and ghost file dests handle real discovery — the heartbeat is only a path keepalive. If Reticulum grows to that scale, the heartbeat interval can be extended further or replaced entirely with on-demand path resolution.
 
 ---
 
@@ -477,8 +479,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 - [x] **v0.5** — Multi-peer swarm: parallel downloads from multiple seeders, continuous discovery
 - [x] **v0.6** — Global mesh: multi-seeder ghost files, announce type filtering, resume-aware progress, cross-platform field tested
 - [x] **v0.7** — PEX (Peer Exchange): seeders share peer lists over Links, bypassing announce rate-limits, bidirectional seeder discovery, stale path invalidation
-- [x] **v0.8** — Decentralization fix: removed config modification, removed hardcoded entrypoints, 3h seeder heartbeat, exponential backoff on wants, mesh etiquette docs *(current)*
-- [ ] **v0.9** — Bandwidth-aware chunking: adaptive chunk sizes for low-bandwidth links (LoRa, packet radio)
+- [x] **v0.8** — Decentralization fix: removed config modification, removed hardcoded entrypoints, 3h seeder heartbeat, exponential backoff on wants, mesh etiquette docs
+- [x] **v0.9** — Single-destination architecture: one RNS destination per node (not per file), `catalog` request handler, ghost_hash in request payloads, eliminated announce storms *(current)*
 - [ ] **v1.0** — Stable release: comprehensive test suite, packaging, documentation
 
 ---
